@@ -29,6 +29,7 @@
 #include "registries/privilege_registry.hpp"
 #include "utils/dbus_utils.hpp"
 #include "utils/json_utils.hpp"
+#include "utils/multihost_utils.hpp"
 #include "utils/pcie_util.hpp"
 #include "utils/sw_utils.hpp"
 #include "utils/time_utils.hpp"
@@ -2852,8 +2853,7 @@ inline void doNMI(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
             return;
         }
         messages::success(asyncResp->res);
-    },
-        serviceName, objectPath, interfaceName, method);
+    }, serviceName, objectPath, interfaceName, method);
 }
 
 inline void handleComputerSystemResetActionPost(
@@ -2878,6 +2878,20 @@ inline void handleComputerSystemResetActionPost(
                                    systemName);
         return;
     }
+
+    // Extract and validate HostNumber from the request
+    std::optional<std::string> hostNumber;
+    multihost_utils::getHostNumber(req, asyncResp, hostNumber);
+
+    // Check if HostNumber was successfully validated
+    if (!hostNumber.has_value())
+    {
+        // Response already updated
+        return;
+    }
+
+    BMCWEB_LOG_CRITICAL("Requested Host Number {}", hostNumber.value());
+
     std::string resetType;
     if (!json_util::readJsonAction(req, asyncResp->res, "ResetType", resetType))
     {
@@ -2930,16 +2944,22 @@ inline void handleComputerSystemResetActionPost(
     }
     sdbusplus::message::object_path statePath("/xyz/openbmc_project/state");
 
+    std::string hostSvcName = "xyz.openbmc_project.State.Host";
+    std::string chassisSvcName = "xyz.openbmc_project.State.Chassis";
+    std::string pathName = "chassis";
+
     if (hostCommand)
     {
-        setDbusProperty(asyncResp, "Reset", "xyz.openbmc_project.State.Host",
-                        statePath / "host0", "xyz.openbmc_project.State.Host",
-                        "RequestedHostTransition", command);
+        setDbusProperty(
+            asyncResp, "Reset", hostSvcName.append(hostNumber.value()),
+            statePath / systemName, "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition", command);
     }
     else
     {
-        setDbusProperty(asyncResp, "Reset", "xyz.openbmc_project.State.Chassis",
-                        statePath / "chassis0",
+        setDbusProperty(asyncResp, "Reset",
+                        chassisSvcName.append(hostNumber.value()),
+                        statePath / pathName.append(hostNumber.value()),
                         "xyz.openbmc_project.State.Chassis",
                         "RequestedPowerTransition", command);
     }
@@ -3421,11 +3441,25 @@ inline void handleSystemCollectionResetActionGet(
     asyncResp->res.jsonValue["Name"] = "Reset Action Info";
     asyncResp->res.jsonValue["Id"] = "ResetActionInfo";
 
+    // Extract and validate HostNumber from the request
+    std::optional<std::string> hostNumber;
+    multihost_utils::getHostNumber(req, asyncResp, hostNumber);
+
+    // Check if HostNumber was successfully validated
+    if (!hostNumber.has_value())
+    {
+        // Response already updated
+        return;
+    }
+
+    BMCWEB_LOG_CRITICAL("Requested Host Number {}", hostNumber.value());
+
     // Look to see if system defines AllowedHostTransitions
     sdbusplus::asio::getProperty<std::vector<std::string>>(
-        *crow::connections::systemBus, "xyz.openbmc_project.State.Host",
-        "/xyz/openbmc_project/state/host0", "xyz.openbmc_project.State.Host",
-        "AllowedHostTransitions",
+        *crow::connections::systemBus,
+        "xyz.openbmc_project.State.Host" + hostNumber.value(),
+        "/xyz/openbmc_project/state/" + systemName,
+        "xyz.openbmc_project.State.Host", "AllowedHostTransitions",
         [asyncResp](const boost::system::error_code& ec,
                     const std::vector<std::string>& allowedHostTransitions) {
         afterGetAllowedHostTransitions(asyncResp, ec, allowedHostTransitions);
