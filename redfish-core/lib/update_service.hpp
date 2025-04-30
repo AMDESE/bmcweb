@@ -325,7 +325,7 @@ inline void softwareInterfaceAdded(
                     // is added
                     fwAvailableTimer = nullptr;
 
-                    activateImage(objPath.str, objInfo[0].first);
+                    activateImage(objPath.str, objInfo[0].first, hostNumber);
                     if (asyncResp)
                     {
                         createTask(asyncResp, std::move(payload), objPath);
@@ -467,12 +467,6 @@ inline void monitorForSoftwareAvailable(
         {
             messages::serviceTemporarilyUnavailable(asyncResp->res, "30");
         }
-        return;
-    }
-
-    if (req.ioService == nullptr)
-    {
-        messages::internalError(asyncResp->res);
         return;
     }
 
