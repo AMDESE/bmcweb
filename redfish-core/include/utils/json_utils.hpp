@@ -98,6 +98,14 @@ template <typename... Types>
 struct IsVariant<std::variant<Types...>> : std::true_type
 {};
 
+template <typename Type>
+struct IsMap : std::false_type
+{};
+
+template <>
+struct IsMap<std::map<std::string, std::string>> : std::true_type
+{};
+
 enum class UnpackErrorCode
 {
     success,
@@ -209,8 +217,8 @@ UnpackErrorCode unpackValueWithErrorCode(nlohmann::json& jsonValue,
         value = static_cast<Type>(*jsonPtr);
     }
 
-    else if constexpr ((std::is_unsigned_v<Type>)&&(
-                           !std::is_same_v<bool, Type>))
+    else if constexpr ((std::is_unsigned_v<Type>) &&
+                       (!std::is_same_v<bool, Type>))
     {
         uint64_t* jsonPtr = jsonValue.get_ptr<uint64_t*>();
         if (jsonPtr == nullptr)
@@ -334,6 +342,26 @@ bool unpackValue(nlohmann::json& jsonValue, std::string_view key,
                 messages::propertyValueNotInList(res, jsonValue, key);
             }
             return false;
+        }
+    }
+    else if constexpr (IsMap<Type>::value)
+    {
+        if (!jsonValue.is_object())
+        {
+            messages::propertyValueTypeError(res, res.jsonValue, key);
+            return false;
+        }
+
+        value.clear();
+        for (auto& [jsonKey, jsonVal] : jsonValue.items())
+        {
+            if (!jsonVal.is_string())
+            {
+                messages::propertyValueTypeError(res, res.jsonValue, key);
+                return false;
+            }
+
+            value[jsonKey] = jsonVal.get<std::string>();
         }
     }
     else
@@ -460,6 +488,7 @@ using UnpackVariant = std::variant<
     std::optional<bool>*,
     std::optional<double>*,
     std::optional<std::string>*,
+    std::optional<std::map<std::string, std::string>>*,
     std::optional<nlohmann::json::object_t>*,
     std::optional<std::vector<uint8_t>>*,
     std::optional<std::vector<uint16_t>>*,
@@ -566,8 +595,7 @@ inline bool readJsonHelperObject(nlohmann::json::object_t& obj,
                     std::remove_pointer_t<std::decay_t<decltype(val)>>;
                 return details::unpackValue<ContainedT>(
                     item.second, unpackSpec.key, res, *val);
-            },
-                         unpackSpec.value) &&
+            }, unpackSpec.value) &&
                      result;
 
             unpackSpec.complete = true;
@@ -585,13 +613,11 @@ inline bool readJsonHelperObject(nlohmann::json::object_t& obj,
     {
         if (!perUnpack.complete)
         {
-            bool isOptional = std::visit(
-                [](auto&& val) {
+            bool isOptional = std::visit([](auto&& val) {
                 using ContainedType =
                     std::remove_pointer_t<std::decay_t<decltype(val)>>;
                 return details::IsOptional<ContainedType>::value;
-            },
-                perUnpack.value);
+            }, perUnpack.value);
             if (isOptional)
             {
                 continue;
@@ -848,8 +874,9 @@ inline void sortJsonArrayByOData(nlohmann::json::array_t& array)
 //  5. null: 4 characters (null)
 uint64_t getEstimatedJsonSize(const nlohmann::json& root);
 
-//Convert json Key to Upper case
-inline std::string toUpperCase(const std::string& input) {
+// Convert json Key to Upper case
+inline std::string toUpperCase(const std::string& input)
+{
     std::string result = input;
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return std::toupper(c); });
