@@ -415,14 +415,24 @@ inline void getPCIeDeviceAsset(
                 asyncResp->res.jsonValue["Model"] = *model;
             }
 
-            if (partNumber != nullptr)
+            if (partNumber != nullptr && !partNumber->empty() &&
+                *partNumber != "Not Available")
             {
                 asyncResp->res.jsonValue["PartNumber"] = *partNumber;
             }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "PartNumber");
+            }
 
-            if (serialNumber != nullptr)
+            if (serialNumber != nullptr && !serialNumber->empty() &&
+                *serialNumber != "Not Available")
             {
                 asyncResp->res.jsonValue["SerialNumber"] = *serialNumber;
+            }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
             }
 
             if (sparePartNumber != nullptr && !sparePartNumber->empty())
@@ -619,12 +629,11 @@ inline void handlePCIeDeviceGet(
  * @brief PCIeDevicePost will be used by BIOS to Post Pcie data to BMC
  *
  **/
-inline void
-    handlePCIeDevicePost(App& app, const crow::Request& req,
+inline void handlePCIeDevicePost(
+    App& app, const crow::Request& req,
 
-                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                         const std::string& systemName,
-                         const std::string& pcieDeviceId)
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& pcieDeviceId)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -644,8 +653,8 @@ inline void
         return;
     }
 
-    nlohmann::json pciePostJsonObject = nlohmann::json::parse(req.body(),
-                                                              nullptr, false);
+    nlohmann::json pciePostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
     InnerMap pcieDataMap;
     for (auto& [key, value] : pciePostJsonObject.items())
     {
@@ -671,14 +680,15 @@ inline void
     pcieMap[pcieDeviceId] = pcieDataMap;
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
-        if (ec)
-        {
-            BMCWEB_LOG_DEBUG("SetPcieData - D-Bus responses error: {}", ec);
-            messages::internalError(asyncResp->res);
-            return;
-        }
-        messages::success(asyncResp->res);
-    }, "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("SetPcieData - D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "SetPcieData", pcieMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
