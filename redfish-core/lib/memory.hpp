@@ -427,6 +427,7 @@ inline void
     const std::string* sparePartNumber = nullptr;
     const std::string* model = nullptr;
     const std::string* locationCode = nullptr;
+    const uint16_t* correctableError = nullptr;
 
     const bool success = sdbusplus::unpackPropertiesNoThrow(
         dbus_utils::UnpackErrorPrinter(), properties, "MemoryDataWidth",
@@ -439,7 +440,8 @@ inline void
         memoryConfiguredSpeedInMhz, "MemoryType", memoryType, "Channel",
         channel, "MemoryController", memoryController, "Slot", slot, "Socket",
         socket, "SparePartNumber", sparePartNumber, "Model", model,
-        "LocationCode", locationCode);
+        "LocationCode", locationCode, "CorrectableErrorCount",
+        correctableError);
 
     if (!success)
     {
@@ -450,6 +452,12 @@ inline void
     if (memoryDataWidth != nullptr)
     {
         asyncResp->res.jsonValue[jsonPtr]["DataWidthBits"] = *memoryDataWidth;
+    }
+
+    if (correctableError != nullptr)
+    {
+        asyncResp->res.jsonValue[jsonPtr]["CorrectableECCErrorCount"] =
+            *correctableError;
     }
 
     if (memorySizeInKB != nullptr)
