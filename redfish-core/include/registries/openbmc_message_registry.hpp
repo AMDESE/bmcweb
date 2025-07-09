@@ -2343,6 +2343,16 @@ static constexpr std::array registry =
             "None.",
         }},
     MessageEntry{
+        "AmdAifsFailureMatch",
+        {
+            "Indicates AIFS signature ID match detected",
+            "AIFS signature ID match detected",
+            "Critical",
+            0,
+            {},
+            "None.",
+        }},    
+    MessageEntry{
         "VoltageRegulatorOverheated",
         {
             "Indicates that the specified voltage regulator overheated.",
@@ -2550,7 +2560,9 @@ enum class Index
     systemPowerLost = 188,
     systemPowerOffFailed = 189,
     systemPowerOnFailed = 190,
-    voltageRegulatorOverheated = 191,
+    AmdAifsFailureMatch = 191,
+    voltageRegulatorOverheated = 192,
+
 };
 }; // struct openbmc
 
