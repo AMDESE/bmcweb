@@ -116,6 +116,7 @@ RedfishService::RedfishService(App& app)
     requestRoutesEventLogService(app);
 
     requestRoutesSystemsLogServicesPostCode(app);
+    requestRoutesEventLogEntriesPost(app);
 
     if constexpr (BMCWEB_REDFISH_DUMP_LOG)
     {
