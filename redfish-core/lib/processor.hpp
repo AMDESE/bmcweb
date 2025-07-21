@@ -1359,6 +1359,11 @@ inline void requestRoutesProcessor(App& app)
                 "/redfish/v1/Systems/{}/Processors/{}",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
 
+            asyncResp->res.jsonValue["OEM"]["AmdSocConfigurationToken"] = {
+                {"#Processor.AmdSocConfigurationToken",
+                 {{"@odata.id", "/redfish/v1/Systems/" + systemName + "/Processors/" +
+                             processorId + "/Oem/AMD/SocConfiguration"}}}};
+	    
             asyncResp->res.jsonValue["Actions"]["Oem"] = {
                 {"#Processor.OobErrorInjectionMode",
                  {{"target",
