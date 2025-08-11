@@ -417,7 +417,7 @@ inline void assembleDimmProperties(
     const std::string* partNumber = nullptr;
     const std::string* serialNumber = nullptr;
     const std::string* manufacturer = nullptr;
-    const uint16_t* revisionCode = nullptr;
+    const std::string* revisionCode = nullptr;
     const bool* present = nullptr;
     const uint16_t* memoryTotalWidth = nullptr;
     const std::string* ecc = nullptr;
@@ -463,8 +463,7 @@ inline void assembleDimmProperties(
 
     if (memorySizeInKB != nullptr)
     {
-        asyncResp->res.jsonValue[jsonPtr]["CapacityMiB"] =
-            (*memorySizeInKB >> 10);
+        asyncResp->res.jsonValue[jsonPtr]["CapacityMiB"] = *memorySizeInKB ;
     }
 
     if (partNumber != nullptr && !partNumber->empty() &&
@@ -494,8 +493,7 @@ inline void assembleDimmProperties(
 
     if (revisionCode != nullptr)
     {
-        asyncResp->res.jsonValue[jsonPtr]["FirmwareRevision"] =
-            std::to_string(*revisionCode);
+        asyncResp->res.jsonValue[jsonPtr]["FirmwareRevision"] = *revisionCode;
     }
 
     if (present != nullptr && !*present)
@@ -879,7 +877,7 @@ inline void handleMemoryDevicePost(
         }
         else
         {
-            BMCWEB_LOG_ERROR("Dimm -Not supported type received from BIOS");
+            BMCWEB_LOG_ERROR("Dimm -Not supported type received from BIOS key = {} and value = {}", key, value);
         }
     }
 
@@ -889,7 +887,7 @@ inline void handleMemoryDevicePost(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
             {
-                BMCWEB_LOG_DEBUG("DIMM - POST D-Bus responses error: {}", ec);
+                BMCWEB_LOG_ERROR("DIMM - POST D-Bus responses error: {}", ec);
                 messages::internalError(asyncResp->res);
                 return;
             }
