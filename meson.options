@@ -146,7 +146,7 @@ option(
     'bmcweb-logging',
     type: 'combo',
     choices: ['disabled', 'enabled', 'debug', 'info', 'warning', 'error', 'critical'],
-    value: 'error',
+    value: 'enabled',
     description: '''Enable output the extended logging level.
                     - disabled: disable bmcweb log traces.
                     - enabled: treated as 'debug'
@@ -385,7 +385,7 @@ option(
 option(
     'redfish-rde',
     type: 'feature',
-    value: 'disabled',
+    value: 'enabled',
     description: '''Enable Redfish Device Enablement (RDE) support.
                     This feature allows BMCWeb to interact with devices
                     using the RDE protocol as defined by DMTF standards.
