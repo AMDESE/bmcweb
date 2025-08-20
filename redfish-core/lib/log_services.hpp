@@ -1612,12 +1612,13 @@ std::string severityToString(int level)
 
 inline void requestRoutesEventLogEntriesPost(App& app)
 {
-    BMCWEB_ROUTE(app, "/redfish/v1/Managers/bmc/LogServices/EventLog/Actions/Oem/OpenBMC.LogService.CreateLogEntry")
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Managers/bmc/LogServices/EventLog/Actions/Oem/OpenBMC.LogService.CreateLogEntry")
         .privileges(redfish::privileges::postLogEntry)
         .methods(boost::beast::http::verb::post)(
             [&app](const crow::Request& req,
                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp) {
-
         BMCWEB_LOG_DEBUG("EventLog POST called");
         if (!redfish::setUpRedfishRoute(app, req, asyncResp))
         {
@@ -1657,7 +1658,7 @@ inline void requestRoutesEventLogEntriesPost(App& app)
                 try
                 {
                     additionalData[key] = value.get<std::string>();
-                    BMCWEB_LOG_ERROR("event log entry additonal :{} ",
+                    BMCWEB_LOG_DEBUG("event log entry additonal :{} ",
                                      additionalData[key]);
                 }
                 catch (const nlohmann::json::type_error&)
@@ -1669,19 +1670,59 @@ inline void requestRoutesEventLogEntriesPost(App& app)
             }
         }
 
-        crow::connections::systemBus->async_method_call(
-            [asyncResp](const boost::system::error_code ec) {
-            if (ec)
+        constexpr const char* ipmiSelMessageId =
+            "b370836ccf2f4850ac5bee185b77893a";
+        std::string redfishMessageId = "OpenBMC.0.1.GeneralError";
+        auto it = additionalData.find("REDFISH_MESSAGE_ID");
+
+        if (it != additionalData.end())
+        {
+            redfishMessageId = it->second;
+        }
+
+        if (redfishMessageId == ipmiSelMessageId)
+        {
+            BMCWEB_LOG_ERROR("IPMI event can not be created");
+            asyncResp->res.result(boost::beast::http::status::not_acceptable);
+            return;
+        }
+
+        if constexpr (BMCWEB_REDFISH_DBUS_LOG)
+        {
+            crow::connections::systemBus->async_method_call(
+                [asyncResp](const boost::system::error_code ec) {
+                if (ec)
+                {
+                    BMCWEB_LOG_ERROR("Failed to create log entry: {}",
+                                     ec.message());
+                    messages::internalError(asyncResp->res);
+                    return;
+                }
+                messages::success(asyncResp->res);
+            }, "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
+                "xyz.openbmc_project.Logging.Create", "Create", message,
+                severity, additionalData);
+        }
+        else
+        {
+            std::string redfishMessageArgs = message;
+
+            it = additionalData.find("REDFISH_MESSAGE_ARGS");
+            if (it != additionalData.end())
             {
-                BMCWEB_LOG_ERROR("Failed to create log entry: {}",
-                                 ec.message());
-                messages::internalError(asyncResp->res);
-                return;
+                redfishMessageArgs = it->second;
             }
+
+            BMCWEB_LOG_DEBUG("Logging to journal: ID={}, ARGS={}",
+                             redfishMessageId, redfishMessageArgs);
+
+            sd_journal_send("MESSAGE=%s", message.c_str(), "PRIORITY=%i",
+                            severityNumber, "REDFISH_MESSAGE_ID=%s",
+                            redfishMessageId.c_str(), "REDFISH_MESSAGE_ARGS=%s",
+                            redfishMessageArgs.c_str(), NULL);
+
             messages::success(asyncResp->res);
-        }, "xyz.openbmc_project.Logging", "/xyz/openbmc_project/logging",
-            "xyz.openbmc_project.Logging.Create", "Create", message, severity,
-            additionalData);
+        }
     });
 }
 
