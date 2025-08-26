@@ -39,6 +39,7 @@ using ObjectPath = sdbusplus::message::object_path;
 using DbusVariantType = std::variant<std::string, uint16_t, int64_t, bool>;
 
 constexpr const char* procSchemaName = "Processors";
+constexpr const char* networkSchemaName = "NetworkAdapter";
 constexpr const char* rdeDeviceInterface = "xyz.openbmc_project.RDE.Device";
 constexpr const char* pldmService = "xyz.openbmc_project.PLDM";
 constexpr const char* rdeSignalInterface =
@@ -734,6 +735,11 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
             odataType = "#ProcessorCollection.ProcessorCollection";
             collectionName = "Processor Collection";
         }
+	else if (schema == networkSchemaName)
+        {
+            odataType = "#NetworkAdapterCollection.NetworkAdapterCollection";
+            collectionName = "Network Adapter Collection";
+        }
         else
         {
             BMCWEB_LOG_WARNING(
@@ -1219,6 +1225,33 @@ inline void requestRoutesRDEService(crow::App& app)
                               "/Processors/" + deviceId;
         handleRDEServiceRoot(app, req, asyncResp, systemId, deviceId,
                              redfish::procSchemaName, baseUri);
+    });
+
+     BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/NetworkAdapters/<str>/<path>")
+        .privileges(redfish::privileges::patchProcessor)
+        .methods(boost::beast::http::verb::head, boost::beast::http::verb::get,
+                 boost::beast::http::verb::patch)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& systemId, const std::string& deviceId,
+                   const std::string& vendorPath) {
+        std::string baseUri = "/redfish/v1/Systems/" + systemId +
+                              "/NetworkAdapters/" + deviceId;
+
+        handleRDEServicePath(app, req, asyncResp, systemId, deviceId,
+                             vendorPath, redfish::networkSchemaName, baseUri);
+    });
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/NetworkAdapters/<str>")
+        .privileges(redfish::privileges::getProcessor)
+        .methods(boost::beast::http::verb::get)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& systemId, const std::string& deviceId) {
+        std::string baseUri = "/redfish/v1/Systems/" + systemId +
+                              "/NetworkAdapters/" + deviceId;
+        handleRDEServiceRoot(app, req, asyncResp, systemId, deviceId,
+                             redfish::networkSchemaName, baseUri);
     });
 }
 
