@@ -207,7 +207,7 @@ inline void getCpuDataByInterface(
                 }
                 else
                 {
-                    messages::propertyNotUpdated(asyncResp->res,"PPIN");
+                    messages::propertyNotUpdated(asyncResp->res, "PPIN");
                 }
             }
             else if (property.first == "Microcode")
@@ -446,7 +446,7 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
         }
         else
         {
-            messages::propertyNotUpdated(asyncResp->res,"SerialNumber");
+            messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
         }
 
         if ((model != nullptr) && !model->empty())
@@ -477,7 +477,7 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
         }
         else
         {
-            messages::propertyNotUpdated(asyncResp->res,"PartNumber");
+            messages::propertyNotUpdated(asyncResp->res, "PartNumber");
         }
 
         if (sparePartNumber != nullptr && !sparePartNumber->empty())
@@ -1385,6 +1385,12 @@ inline void requestRoutesProcessor(App& app)
              {{"target", "/redfish/v1/Systems/system/Processors/" +
                              processorId +
                              "/Actions/Oem/Processor.SupportedErrorTypes"}}}};
+
+        // Add SocConfiguration sub-resource link
+        asyncResp->res.jsonValue["Oem"]["AMD"]["SocConfiguration"]
+                                ["@odata.id"] = boost::urls::format(
+            "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/SocConfiguration",
+            BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
 
         getProcessorObject(
             asyncResp, processorId,
