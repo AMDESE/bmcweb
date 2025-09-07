@@ -58,6 +58,9 @@ inline void handleSystemCollectionMembers(
         system["@odata.id"] = boost::urls::format(
             "/redfish/v1/Systems/{}", BMCWEB_REDFISH_SYSTEM_URI_NAME);
         membersArray.emplace_back(std::move(system));
+        membersArray.emplace_back(nlohmann::json::object_t{
+            {"@odata.id", "/redfish/v1/Systems/Device"}});
+        asyncResp->res.jsonValue["Members@odata.count"] = membersArray.size();
 
         if constexpr (BMCWEB_HYPERVISOR_COMPUTER_SYSTEM)
         {

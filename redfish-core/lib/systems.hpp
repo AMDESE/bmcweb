@@ -3053,6 +3053,15 @@ inline void handleComputerSystemGet(
         }
     }
 
+    if (systemName.starts_with("Device"))
+    {
+        // Add SocConfiguration sub-resource link
+        asyncResp->res.jsonValue["NetworkAdapterCollection"]["@odata.id"] =
+            boost::urls::format("/redfish/v1/Systems/{}/NetworkAdapters/0",
+                                systemName);
+        return;
+    }
+
     if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
     {
         messages::resourceNotFound(asyncResp->res, "ComputerSystem",
