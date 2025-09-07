@@ -69,6 +69,108 @@ inline std::string rdeOpTaskMatch(const std::string& objPath)
 }
 
 /**
+ * @brief Resolves deferred bindings in a BEJ-encoded JSON string using a
+ * resource registry.
+ *
+ * This function parses a BEJ JSON string and replaces placeholders like
+ * `%L<id>` and `%I<id>` with actual URIs or integer values based on the
+ * provided resource registry (`resourceData`). It handles three types of
+ * replacements:
+ *   1. Bare objects like {"%L123"} → {"@odata.id": "<URI>"}.
+ *   2. Inline references like %L123 → "<URI>".
+ *   3. Integer references like %I123 → "123".
+ *
+ * @param[in] bejJsonInput The input BEJ JSON string containing placeholders.
+ * @param[in] uriMapJson   The JSON object containing the URI map, where keys
+ * arestringified integers (resource IDs) and values are full URIstrings.
+ *
+ * @return nlohmann::json Parsed JSON object with all placeholders resolved.
+ */
+inline nlohmann::json handleDeferredBindings(const std::string& bejJsonInput,
+                                             const nlohmann::json& uriMapJson)
+{
+    BMCWEB_LOG_DEBUG("RDE:handleDeferredBindings Enter");
+
+    // Parse resource_registry.txt into uriMap
+    std::unordered_map<int, std::string> uriMap;
+    for (auto it = uriMapJson.begin(); it != uriMapJson.end(); ++it)
+    {
+        try
+        {
+            int resourceId = std::stoi(it.key());
+            uriMap[resourceId] = it.value();
+        }
+        catch (const std::exception& e)
+        {
+            BMCWEB_LOG_WARNING(
+                " RDE: Invalid resource ID in uriMapJson: Key: {}  error: {}",
+                it.key(), e.what());
+        }
+    }
+
+    std::string bejJson = bejJsonInput;
+    std::regex bareObjectRegex("\\{\\s*\"%L(\\d+)\"\\s*\\}");
+    std::ostringstream oss1;
+    std::sregex_iterator begin1(bejJson.begin(), bejJson.end(),
+                                bareObjectRegex),
+        end1;
+    size_t lastPos1 = 0;
+
+    for (auto it = begin1; it != end1; ++it)
+    {
+        oss1 << bejJson.substr(
+            lastPos1,
+            static_cast<size_t>(static_cast<std::ptrdiff_t>(it->position()) -
+                                static_cast<std::ptrdiff_t>(lastPos1)));
+
+        int id = std::stoi((*it)[1]);
+        auto uriIt = uriMap.find(id);
+        if (uriIt != uriMap.end())
+        {
+            oss1 << R"({"@odata.id":")" << uriIt->second << R"("})";
+        }
+        else
+        {
+            oss1 << it->str(); // leave unchanged
+        }
+        lastPos1 = static_cast<size_t>(it->position() + it->length());
+    }
+    oss1 << bejJson.substr(lastPos1);
+    bejJson = oss1.str();
+
+    std::regex lPattern(R"(%L(\d+))");
+    std::ostringstream oss2;
+    std::sregex_iterator begin2(bejJson.begin(), bejJson.end(), lPattern), end2;
+    size_t lastPos2 = 0;
+    for (auto it = begin2; it != end2; ++it)
+    {
+        oss2 << bejJson.substr(
+            lastPos2,
+            static_cast<size_t>(static_cast<std::ptrdiff_t>(it->position()) -
+                                static_cast<std::ptrdiff_t>(lastPos2)));
+
+        int id = std::stoi((*it)[1]);
+        auto uriIt = uriMap.find(id);
+        if (uriIt != uriMap.end())
+        {
+            oss2 << uriIt->second;
+        }
+        else
+        {
+            oss2 << it->str(); // leave unchanged
+        }
+        lastPos2 = static_cast<size_t>(it->position() + it->length());
+    }
+    oss2 << bejJson.substr(lastPos2);
+    bejJson = oss2.str();
+
+    bejJson = std::regex_replace(bejJson, std::regex(R"(%I(\d+))"), "$1");
+    BMCWEB_LOG_DEBUG("RDE: BEJ JSON String Output: {}", bejJson);
+
+    return nlohmann::json::parse(bejJson);
+}
+
+/**
  * @class RDEServiceHandler
  * @brief Handles Redfish Device Enablement (RDE) service requests.
  *
@@ -227,104 +329,108 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
             [self](
                 const boost::system::error_code& ec,
                 const dbus::utility::MapperGetSubTreePathsResponse& objPaths) {
-            if (ec)
-            {
-                BMCWEB_LOG_ERROR(
-                    "RDE: bootstrapProcess getSubTreePaths DBUS error: {}",
-                    ec.message());
-                messages::internalError(self->asyncResp->res);
-                return;
-            }
-
-            for (const std::string& path : objPaths)
-            {
-                sdbusplus::message::object_path objPath(path);
-                std::string pathName = objPath.filename();
-                if (pathName.empty())
+                if (ec)
                 {
                     BMCWEB_LOG_ERROR(
-                        "RDE: bootstrapProcess Failed to find '/' in {}", path);
-                    continue;
+                        "RDE: bootstrapProcess getSubTreePaths DBUS error: {}",
+                        ec.message());
+                    messages::internalError(self->asyncResp->res);
+                    return;
                 }
 
-                BMCWEB_LOG_DEBUG(
-                    "RDE: bootstrapProcess Found device with ObjectPath {}",
-                    path);
-
-                sdbusplus::asio::getAllProperties(
-                    *crow::connections::systemBus, std::string(pldmService),
-                    path, std::string(rdeDeviceInterface),
-                    [self](const boost::system::error_code& errCode,
-                           const RDEPropertiesMap& properties) {
-                    if (errCode)
+                for (const std::string& path : objPaths)
+                {
+                    sdbusplus::message::object_path objPath(path);
+                    std::string pathName = objPath.filename();
+                    if (pathName.empty())
                     {
                         BMCWEB_LOG_ERROR(
-                            "RDE: bootstrapProcess DBUS response error: {}",
-                            errCode.message());
-                        return;
+                            "RDE: bootstrapProcess Failed to find '/' in {}",
+                            path);
+                        continue;
                     }
 
-                    std::string uuid;
-                    SchemaResourcesType schemaResources;
+                    BMCWEB_LOG_DEBUG(
+                        "RDE: bootstrapProcess Found device with ObjectPath {}",
+                        path);
 
-                    const bool success = sdbusplus::unpackPropertiesNoThrow(
-                        dbus_utils::UnpackErrorPrinter(), properties,
-                        "DeviceUUID", uuid, "EID", self->deviceEID,
-                        "SchemaResources", schemaResources);
+                    sdbusplus::asio::getAllProperties(
+                        *crow::connections::systemBus, std::string(pldmService),
+                        path, std::string(rdeDeviceInterface),
+                        [self](const boost::system::error_code& errCode,
+                               const RDEPropertiesMap& properties) {
+                            if (errCode)
+                            {
+                                BMCWEB_LOG_ERROR(
+                                    "RDE: bootstrapProcess DBUS response error: {}",
+                                    errCode.message());
+                                return;
+                            }
 
-                    if (!success)
-                    {
-                        BMCWEB_LOG_ERROR(
-                            "RDE: bootstrapProcess Failed to unpack properties");
-                        return;
-                    }
+                            std::string uuid;
+                            SchemaResourcesType schemaResources;
 
-                    if (std::find(self->deviceUUIDList.begin(),
-                                  self->deviceUUIDList.end(),
-                                  uuid) == self->deviceUUIDList.end())
-                    {
-                        BMCWEB_LOG_DEBUG(
-                            "RDE: bootstrapProcess UUID mismatch: expected");
-                        return;
-                    }
-                    // UUID matched — update the active device UUID
-                    self->deviceUUID = uuid;
-                    BMCWEB_LOG_INFO(
-                        "RDE: bootstrapProcess UUID {} matched and updated",
-                        uuid);
+                            const bool success =
+                                sdbusplus::unpackPropertiesNoThrow(
+                                    dbus_utils::UnpackErrorPrinter(),
+                                    properties, "DeviceUUID", uuid, "EID",
+                                    self->deviceEID, "SchemaResources",
+                                    schemaResources);
 
-                    for (const auto& [rid, valueMap] : schemaResources)
-                    {
-                        RDESchemaEntry entry;
+                            if (!success)
+                            {
+                                BMCWEB_LOG_ERROR(
+                                    "RDE: bootstrapProcess Failed to unpack properties");
+                                return;
+                            }
 
-                        entry.rid = rid;
-                        if (const auto* val = std::get_if<std::string>(
-                                &valueMap.at("schemaName")))
-                            entry.schemaName = *val;
-                        if (const auto* val = std::get_if<std::string>(
-                                &valueMap.at("schemaVersion")))
-                            entry.schemaVersion = *val;
-                        if (const auto* val = std::get_if<std::string>(
-                                &valueMap.at("subUri")))
-                            entry.subUri = *val;
-                        if (const auto* val = std::get_if<int64_t>(
-                                &valueMap.at("schemaClass")))
-                            entry.schemaClass = *val;
-                        if (!entry.subUri.empty())
-                        {
-                            entry.fullUri = self->baseUri + "/" + entry.subUri;
-                        }
+                            if (std::find(self->deviceUUIDList.begin(),
+                                          self->deviceUUIDList.end(), uuid) ==
+                                self->deviceUUIDList.end())
+                            {
+                                BMCWEB_LOG_DEBUG(
+                                    "RDE: bootstrapProcess UUID mismatch: expected");
+                                return;
+                            }
+                            // UUID matched — update the active device UUID
+                            self->deviceUUID = uuid;
+                            BMCWEB_LOG_INFO(
+                                "RDE: bootstrapProcess UUID {} matched and updated",
+                                uuid);
 
-                        // Add to resourceData
-                        self->resourceData.push_back(std::move(entry));
-                    }
-                    BMCWEB_LOG_INFO(
-                        "RDE: bootstrapProcess Successfully updated resourceData for UUID {}",
-                        uuid);
-                    self->process(self);
-                });
-            }
-        });
+                            for (const auto& [rid, valueMap] : schemaResources)
+                            {
+                                RDESchemaEntry entry;
+
+                                entry.rid = rid;
+                                if (const auto* val = std::get_if<std::string>(
+                                        &valueMap.at("schemaName")))
+                                    entry.schemaName = *val;
+                                if (const auto* val = std::get_if<std::string>(
+                                        &valueMap.at("schemaVersion")))
+                                    entry.schemaVersion = *val;
+                                if (const auto* val = std::get_if<std::string>(
+                                        &valueMap.at("subUri")))
+                                    entry.subUri = *val;
+                                if (const auto* val = std::get_if<int64_t>(
+                                        &valueMap.at("schemaClass")))
+                                    entry.schemaClass = *val;
+                                if (!entry.subUri.empty())
+                                {
+                                    entry.fullUri = self->baseUri + "/" +
+                                                    entry.subUri;
+                                }
+
+                                // Add to resourceData
+                                self->resourceData.push_back(std::move(entry));
+                            }
+                            BMCWEB_LOG_INFO(
+                                "RDE: bootstrapProcess Successfully updated resourceData for UUID {}",
+                                uuid);
+                            self->process(self);
+                        });
+                }
+            });
     }
 
   private:
@@ -592,8 +698,8 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
      *
      * @param[in] self Shared pointer to the current RDEServiceHandler instance.
      */
-    inline void
-        buildResourceResponse(const std::shared_ptr<RDEServiceHandler>& self)
+    inline void buildResourceResponse(
+        const std::shared_ptr<RDEServiceHandler>& self)
     {
         if (self->responseSent)
             return;
@@ -670,119 +776,126 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
         crow::connections::systemBus->async_method_call(
             [self](const boost::system::error_code ec,
                    const sdbusplus::message_t&, const ObjectPath& objPath) {
-            if (ec)
-            {
-                BMCWEB_LOG_ERROR("RDE: operationGet: {}", ec.message());
-                messages::internalError(self->asyncResp->res);
-                return;
-            }
-
-            BMCWEB_LOG_INFO("RDE: task created at {}",
-                            static_cast<const std::string&>(objPath));
-
-            self->operationTaskTimeout =
-                std::make_shared<boost::asio::steady_timer>(
-                    crow::connections::systemBus->get_io_context());
-            self->operationTaskTimeout->expires_after(std::chrono::seconds(10));
-            self->operationTaskTimeout->async_wait(
-                [self](const boost::system::error_code& timerEc) {
-                if (timerEc != boost::asio::error::operation_aborted)
+                if (ec)
                 {
-                    BMCWEB_LOG_ERROR("RDE: Timeout — No signal received.");
+                    BMCWEB_LOG_ERROR("RDE: operationGet: {}", ec.message());
                     messages::internalError(self->asyncResp->res);
                     return;
                 }
-                else
-                {
-                    BMCWEB_LOG_INFO("RDE: Timer cancelled — signal processed.");
-                    return;
-                }
-            });
 
-            const std::string matchRule = rdeOpTaskMatch(objPath.str);
-            self->operationTaskSignalMatch =
-                std::make_shared<sdbusplus::bus::match::match>(
+                BMCWEB_LOG_INFO("RDE: task created at {}",
+                                static_cast<const std::string&>(objPath));
+
+                self->operationTaskTimeout =
+                    std::make_shared<boost::asio::steady_timer>(
+                        crow::connections::systemBus->get_io_context());
+                self->operationTaskTimeout->expires_after(
+                    std::chrono::seconds(10));
+                self->operationTaskTimeout->async_wait(
+                    [self](const boost::system::error_code& timerEc) {
+                        if (timerEc != boost::asio::error::operation_aborted)
+                        {
+                            BMCWEB_LOG_ERROR(
+                                "RDE: Timeout — No signal received.");
+                            messages::internalError(self->asyncResp->res);
+                            return;
+                        }
+                        else
+                        {
+                            BMCWEB_LOG_INFO(
+                                "RDE: Timer cancelled — signal processed.");
+                            return;
+                        }
+                    });
+
+                const std::string matchRule = rdeOpTaskMatch(objPath.str);
+                self->operationTaskSignalMatch = std::make_shared<
+                    sdbusplus::bus::match::match>(
                     *crow::connections::systemBus, matchRule,
                     [self](sdbusplus::message_t& msg) {
-                BMCWEB_LOG_DEBUG(
-                    "RDE: Signal received for OperationTask update");
-                std::unordered_map<std::string, DbusVariantType> changed;
+                        BMCWEB_LOG_DEBUG(
+                            "RDE: Signal received for OperationTask update");
+                        std::unordered_map<std::string, DbusVariantType>
+                            changed;
 
-                try
-                {
-                    msg.read(changed);
-                }
-                catch (const std::exception& e)
-                {
-                    BMCWEB_LOG_ERROR("RDE: Failed to read DBus signal: {}",
-                                     e.what());
-                    return;
-                }
-
-                auto codeIt = changed.find("CompletionCode");
-                if (codeIt != changed.end())
-                {
-                    uint16_t code = std::get<uint16_t>(codeIt->second);
-                    if (code == completionCodeOperationCompleted)
-                    {
-                        BMCWEB_LOG_INFO("RDE: Task completed successfully.");
-                    }
-                    else if (code == completionCodeOperationFailed)
-                    {
-                        BMCWEB_LOG_ERROR("RDE: Task failed.");
-                        messages::internalError(self->asyncResp->res);
-                    }
-                    else
-                    {
-                        BMCWEB_LOG_INFO(
-                            "RDE: Interim signal received with code {}", code);
-                        return;
-                    }
-                }
-
-                auto payloadIt = changed.find("payload");
-                if (payloadIt != changed.end())
-                {
-                    const std::string& payloadStr =
-                        std::get<std::string>(payloadIt->second);
-                    try
-                    {
-                        nlohmann::json uriMapJson;
-                        for (const auto& it : self->resourceData)
+                        try
                         {
+                            msg.read(changed);
+                        }
+                        catch (const std::exception& e)
+                        {
+                            BMCWEB_LOG_ERROR(
+                                "RDE: Failed to read DBus signal: {}",
+                                e.what());
+                            return;
+                        }
+
+                        auto codeIt = changed.find("CompletionCode");
+                        if (codeIt != changed.end())
+                        {
+                            uint16_t code = std::get<uint16_t>(codeIt->second);
+                            if (code == completionCodeOperationCompleted)
+                            {
+                                BMCWEB_LOG_INFO(
+                                    "RDE: Task completed successfully.");
+                            }
+                            else if (code == completionCodeOperationFailed)
+                            {
+                                BMCWEB_LOG_ERROR("RDE: Task failed.");
+                                messages::internalError(self->asyncResp->res);
+                            }
+                            else
+                            {
+                                BMCWEB_LOG_INFO(
+                                    "RDE: Interim signal received with code {}",
+                                    code);
+                                return;
+                            }
+                        }
+
+                        auto payloadIt = changed.find("payload");
+                        if (payloadIt != changed.end())
+                        {
+                            const std::string& payloadStr =
+                                std::get<std::string>(payloadIt->second);
                             try
                             {
-                                int resourceId = std::stoi(it.rid);
-                                uriMapJson[std::to_string(resourceId)] =
-                                    it.fullUri;
+                                nlohmann::json uriMapJson;
+                                for (const auto& it : self->resourceData)
+                                {
+                                    try
+                                    {
+                                        int resourceId = std::stoi(it.rid);
+                                        uriMapJson[std::to_string(resourceId)] =
+                                            it.fullUri;
+                                    }
+                                    catch (const std::exception& e)
+                                    {
+                                        BMCWEB_LOG_WARNING(
+                                            "RDE: Invalid rid:{}  error:{} ",
+                                            it.rid, e.what());
+                                    }
+                                }
+                                self->asyncResp->res.jsonValue["Payload"] =
+                                    redfish::handleDeferredBindings(payloadStr,
+                                                                    uriMapJson);
+                                BMCWEB_LOG_INFO(
+                                    "RDE: Parsed payload and updated response");
                             }
                             catch (const std::exception& e)
                             {
-                                BMCWEB_LOG_WARNING(
-                                    "RDE: Invalid rid:{}  error:{} ", it.rid,
-                                    e.what());
+                                BMCWEB_LOG_ERROR("RDE: Payload parse error: {}",
+                                                 e.what());
+                                messages::internalError(self->asyncResp->res);
                             }
                         }
-                        self->asyncResp->res.jsonValue["Payload"] =
-                            redfish::handleDeferredBindings(payloadStr,
-                                                            uriMapJson);
-                        BMCWEB_LOG_INFO(
-                            "RDE: Parsed payload and updated response");
-                    }
-                    catch (const std::exception& e)
-                    {
-                        BMCWEB_LOG_ERROR("RDE: Payload parse error: {}",
-                                         e.what());
-                        messages::internalError(self->asyncResp->res);
-                    }
-                }
 
-                self->operationTaskTimeout->cancel();
-                self->operationTaskTimeout.reset();
-                self->operationTaskSignalMatch.reset();
-                return;
-            });
-        },
+                        self->operationTaskTimeout->cancel();
+                        self->operationTaskTimeout.reset();
+                        self->operationTaskSignalMatch.reset();
+                        return;
+                    });
+            },
             pldmService, rdeManagerPath, rdeManagerInterface,
             rdeOperationMethod, self->nextOperationId(), rdeOperationTypeRead,
             self->subUri, self->deviceUUID, self->deviceEID, rdeEmptyPayload,
