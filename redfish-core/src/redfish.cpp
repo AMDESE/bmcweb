@@ -116,7 +116,6 @@ RedfishService::RedfishService(App& app)
     requestRoutesEventLogService(app);
 
     requestRoutesSystemsLogServicesPostCode(app);
-    requestRoutesEventLogEntriesPost(app);
 
     if constexpr (BMCWEB_REDFISH_DUMP_LOG)
     {
@@ -189,12 +188,14 @@ RedfishService::RedfishService(App& app)
         requestRoutesDBusEventLogEntryCollection(app);
         requestRoutesDBusEventLogEntry(app);
         requestRoutesDBusEventLogEntryDownload(app);
+	requestRoutesDBusEventLogEntryPost(app);
     }
     else
     {
         requestRoutesJournalEventLogEntryCollection(app);
         requestRoutesJournalEventLogEntry(app);
         requestRoutesJournalEventLogClear(app);
+	requestRoutesJournalEventLogEntryPost(app);
     }
 
     if constexpr (BMCWEB_REDFISH_HOST_LOGGER)
