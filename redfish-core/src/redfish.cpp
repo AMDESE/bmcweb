@@ -188,14 +188,14 @@ RedfishService::RedfishService(App& app)
         requestRoutesDBusEventLogEntryCollection(app);
         requestRoutesDBusEventLogEntry(app);
         requestRoutesDBusEventLogEntryDownload(app);
-	requestRoutesDBusEventLogEntryPost(app);
+        requestRoutesDBusEventLogEntryPost(app);
     }
     else
     {
         requestRoutesJournalEventLogEntryCollection(app);
         requestRoutesJournalEventLogEntry(app);
         requestRoutesJournalEventLogClear(app);
-	requestRoutesJournalEventLogEntryPost(app);
+        requestRoutesJournalEventLogEntryPost(app);
     }
 
     if constexpr (BMCWEB_REDFISH_HOST_LOGGER)
@@ -245,8 +245,9 @@ RedfishService::RedfishService(App& app)
     requestRoutesTriggerCollection(app);
     requestRoutesTrigger(app);
 
-    if constexpr (BMCWEB_REDFISH_RDE)
+    // if constexpr (!BMCWEB_REDFISH_RDE)
     {
+        BMCWEB_LOG_ERROR("Rgistering requestRoutesRDEService");
         requestRoutesRDEService(app);
     }
 

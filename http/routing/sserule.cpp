@@ -62,5 +62,23 @@ void SseSocketRule::handleUpgrade(
             std::move(adaptor), openHandler, closeHandler);
     myConnection->start(req);
 }
+void SseSocketRule::handleUpgrade(
+    const Request& /*req*/,
+    const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+    boost::asio::local::stream_protocol::socket&& /*adaptor*/)
+{
+    // It used for resolving build error, local socket connections don't use
+    // upgrade
+}
+
+void SseSocketRule::handleUpgrade(
+    const Request& /*req*/,
+    const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+    boost::asio::ssl::stream<
+        boost::asio::local::stream_protocol::socket>&& /*adaptor*/)
+{
+    // It used for resolving build error, local socket connections don't use
+    // upgrade
+}
 
 } // namespace crow

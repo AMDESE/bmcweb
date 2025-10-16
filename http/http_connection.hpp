@@ -21,6 +21,7 @@
 
 #include <boost/asio/error.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/asio/ssl/stream_base.hpp>
 #include <boost/asio/ssl/verify_context.hpp>
@@ -501,9 +502,26 @@ class Connection :
 
     void readClientIp()
     {
-        boost::system::error_code ec;
+        if constexpr (std::is_same_v<Adaptor, boost::asio::ip::tcp::socket>)
+        {
+            readClientIpFromTcpSocket();
+        }
+        else
+        {
+            BMCWEB_LOG_DEBUG("Not tcp socket, skipping readClientIp");
+        }
+    }
 
-        boost::asio::ip::tcp::endpoint endpoint =
+    void disableAuth()
+    {
+        authenticationEnabled = false;
+    }
+
+  private:
+    void readClientIpFromTcpSocket()
+    {
+        boost::system::error_code ec;
+        auto endpoint =
             boost::beast::get_lowest_layer(adaptor).remote_endpoint(ec);
 
         if (ec)
@@ -517,12 +535,6 @@ class Connection :
         ip = endpoint.address();
     }
 
-    void disableAuth()
-    {
-        authenticationEnabled = false;
-    }
-
-  private:
     uint64_t getContentLengthLimit()
     {
         if constexpr (!BMCWEB_INSECURE_DISABLE_AUTH)

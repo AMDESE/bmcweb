@@ -197,7 +197,7 @@ option(
         'error',
         'critical',
     ],
-    value: 'error',
+    value: 'enabled',
     description: '''Enable output the extended logging level.
                     - disabled: disable bmcweb log traces.
                     - enabled: treated as 'debug'
@@ -470,6 +470,23 @@ option(
     value: 120,
     description: '''Specifies the systemd watchdog timeout interval in seconds.
                     Set to 0 to disable the watchdog.''',
+)
+
+# BMCWEB_LOCAL_SOCKET
+option(
+    'local-socket',
+    type: 'feature',
+    value: 'disabled',
+    description: '''Enable local socket access for bmcweb. This allows
+                    communication through a Unix domain socket for local
+                    processes.''',
+)
+
+option(
+    'local_socket_path',
+    type: 'string',
+    value: '/tmp/run/local_bmcweb.sock',
+    description: 'Local socket path.',
 )
 
 # Insecure options. Every option that starts with a `insecure` flag should

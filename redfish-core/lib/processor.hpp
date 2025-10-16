@@ -1372,7 +1372,7 @@ inline void requestRoutesProcessor(App& app)
             // Add SocConfiguration sub-resource link
             asyncResp->res.jsonValue["Oem"]["AMD"]["SocConfiguration"]
                                     ["@odata.id"] = boost::urls::format(
-                "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/SocConfiguration/Token",
+                "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/SocConfiguration",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
 
             getProcessorObject(

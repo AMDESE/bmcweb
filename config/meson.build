@@ -42,6 +42,7 @@ feature_options = [
     'tests',
     'vm-websocket',
     'xtoken-auth',
+    'local-socket',
 ]
 
 string_options = [
@@ -132,6 +133,26 @@ if https_port > 0
                 'BMCWEB_PORT': https_port,
                 'HTTP_LEVEL_ALLOWED': 'https',
                 'HTTP_AUTH_LEVEL': 'auth',
+                'HTTP_BIND': '',
+            },
+        ),
+    )
+endif
+
+local_socket_enabled = get_option('local-socket')
+local_socket_path = get_option('local_socket_path')
+
+if local_socket_enabled.allowed()
+    configure_file(
+        input: 'bmcweb.socket.in',
+        output: 'bmcweb.local.socket',
+        install_dir: systemd_system_unit_dir,
+        install: true,
+        configuration: configuration_data(
+            {
+                'BMCWEB_PORT': local_socket_path,
+                'HTTP_LEVEL_ALLOWED': 'http',
+                'HTTP_AUTH_LEVEL': 'noauth',
                 'HTTP_BIND': '',
             },
         ),

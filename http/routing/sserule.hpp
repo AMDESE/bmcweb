@@ -38,6 +38,16 @@ class SseSocketRule : public BaseRule
                        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
                        boost::asio::ssl::stream<boost::asio::ip::tcp::socket>&&
                            adaptor) override;
+    void handleUpgrade(
+        const Request& req,
+        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+        boost::asio::local::stream_protocol::socket&& adaptor) override;
+
+    void handleUpgrade(
+        const Request& req,
+        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+        boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>&&
+            adaptor) override;
 
     template <typename Func>
     self_t& onopen(Func f)
