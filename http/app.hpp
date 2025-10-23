@@ -7,6 +7,7 @@
 #include "http_request.hpp"
 #include "http_server.hpp"
 #include "io_context_singleton.hpp"
+#include "local_socket_server.hpp"
 #include "logging.hpp"
 #include "routing.hpp"
 #include "routing/dynamicrule.hpp"
@@ -16,6 +17,7 @@
 #include <systemd/sd-daemon.h>
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +40,9 @@ class App
   public:
     using raw_socket_t = boost::asio::ip::tcp::socket;
     using server_type = Server<App, raw_socket_t>;
+
+    using local_socket_t = boost::asio::local::stream_protocol::socket;
+    using local_server_type = LocalSocketServer<App, local_socket_t>;
 
     template <typename Adaptor>
     void handleUpgrade(const std::shared_ptr<Request>& req,
@@ -165,6 +170,20 @@ class App
 
         server.emplace(this, std::move(acceptors));
         server->run();
+        if constexpr (BMCWEB_LOCAL_SOCKET)
+        {
+            auto localAcceptor =
+                local_server_type::setupLocalSocket(getIoContext());
+            if (!localAcceptor)
+            {
+                BMCWEB_LOG_ERROR("Couldn't start local socket server");
+                return;
+            }
+
+            localServer.emplace(this, std::move(*localAcceptor),
+                                getIoContext());
+            localServer->run();
+        }
     }
 
     void debugPrint()
@@ -184,6 +203,7 @@ class App
     }
 
     std::optional<server_type> server;
+    std::optional<local_server_type> localServer;
 
     Router router;
 };
