@@ -429,6 +429,7 @@ srcfiles_unittest = files(
     'test/http/http2_connection_test.cpp',
     'test/http/http_body_test.cpp',
     'test/http/http_connection_test.cpp',
+    'test/http/local_socket_server_test.cpp',
     'test/http/http_response_test.cpp',
     'test/http/mutual_tls.cpp',
     'test/http/mutual_tls_meta.cpp',
