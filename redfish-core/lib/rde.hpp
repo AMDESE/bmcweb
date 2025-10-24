@@ -1240,12 +1240,13 @@ inline void requestRoutesRDEService(crow::App& app)
                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
                    const std::string& systemId, const std::string& deviceId,
                    const std::string& vendorPath) {
-        std::string baseUri = "/redfish/v1/Systems/" + systemId +
-                              "/NetworkAdapters/" + deviceId;
+                std::string baseUri = "/redfish/v1/Systems/" + systemId +
+                                      "/NetworkAdapters/" + deviceId;
 
-        handleRDEServicePath(app, req, asyncResp, systemId, deviceId,
-                             vendorPath, redfish::networkSchemaName, baseUri);
-    });
+                handleRDEServicePath(app, req, asyncResp, systemId, deviceId,
+                                     vendorPath, redfish::networkSchemaName,
+                                     baseUri);
+            });
 
     BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/NetworkAdapters/<str>")
         .privileges(redfish::privileges::getProcessor)
@@ -1253,11 +1254,11 @@ inline void requestRoutesRDEService(crow::App& app)
             [&app](const crow::Request& req,
                    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
                    const std::string& systemId, const std::string& deviceId) {
-        std::string baseUri = "/redfish/v1/Systems/" + systemId +
-                              "/NetworkAdapters/" + deviceId;
-        handleRDEServiceRoot(app, req, asyncResp, systemId, deviceId,
-                             redfish::networkSchemaName, baseUri);
-    });
+                std::string baseUri = "/redfish/v1/Systems/" + systemId +
+                                      "/NetworkAdapters/" + deviceId;
+                handleRDEServiceRoot(app, req, asyncResp, systemId, deviceId,
+                                     redfish::networkSchemaName, baseUri);
+            });
 }
 
 } // namespace redfish
