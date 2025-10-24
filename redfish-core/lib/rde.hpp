@@ -171,7 +171,14 @@ inline nlohmann::json handleDeferredBindings(const std::string& bejJsonInput,
     bejJson = std::regex_replace(bejJson, std::regex(R"(%I(\d+))"), "$1");
     BMCWEB_LOG_DEBUG("RDE: BEJ JSON String Output: {}", bejJson);
 
-    return nlohmann::json::parse(bejJson);
+    nlohmann::json jsonPayload;
+    if(!bejJson.empty())
+    {
+        jsonPayload = nlohmann::json::parse(bejJson);
+        return jsonPayload;
+    }
+    else
+        return jsonPayload;
 }
 /**
  * @brief Process the TaskUpdated signal for an RDE Operation Task.
