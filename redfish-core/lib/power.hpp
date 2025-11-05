@@ -92,10 +92,14 @@ inline void afterGetChassisPath(
     auto& item = powerControlCollections[0];
 
     std::optional<uint32_t> value;
-    if (!json_util::readJsonObject(                 //
-            item, sensorsAsyncResp->asyncResp->res, //
-            "PowerLimit/LimitInWatts", value        //
-            ))
+    if (!item.contains("PowerLimit") ||
+        !item["PowerLimit"].contains("LimitInWatts") ||
+        item["PowerLimit"]["LimitInWatts"].is_null())
+    {
+        value = 0;
+    }
+    else if (!json_util::readJsonObject(item, sensorsAsyncResp->asyncResp->res,
+                                        "PowerLimit/LimitInWatts", value))
     {
         return;
     }
@@ -107,13 +111,15 @@ inline void afterGetChassisPath(
     */
     if (value == 0)
     {
-
         setDbusProperty(sensorsAsyncResp->asyncResp, "PowerControl",
                         "xyz.openbmc_project.Settings",
                         sdbusplus::message::object_path(
                             "/xyz/openbmc_project/control/host0/power_cap"),
                         "xyz.openbmc_project.Control.Power.Cap",
                         "PowerCapEnable", false);
+        sensorsAsyncResp->asyncResp->res.result(
+            boost::beast::http::status::no_content);
+        return;
     }
     else
     {
