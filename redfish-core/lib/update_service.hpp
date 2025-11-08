@@ -492,7 +492,7 @@ inline void monitorForSoftwareAvailable(
         }
     }
 
-    if (hostNumber == 0 || hostNumber > 2)
+    if (hostNumber > 2)
     {
         messages::actionParameterNotSupported(
             asyncResp->res, std::to_string(hostNumber), "HostNumber");
@@ -1363,7 +1363,7 @@ inline void handleUpdateServiceFirmwareInventoryGet(
         }
     }
 
-    if (hostNumber == 0 || hostNumber > 2)
+    if (hostNumber > 2)
     {
         messages::actionParameterNotSupported(
             asyncResp->res, std::to_string(hostNumber), "HostNumber");
