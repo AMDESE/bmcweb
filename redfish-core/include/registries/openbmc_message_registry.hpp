@@ -609,6 +609,30 @@ static constexpr std::array registry =
             },
             "None.",
         }},
+        MessageEntry{
+            "GeneralHealthManagerError",
+            {
+                "Indicates a general amd-health-mgr error has occurred.",
+                "amd-health-mgr: %1.",
+                "Critical",
+                1,
+                {
+                    "string",
+                },
+                "None.",
+            }},
+        MessageEntry{
+            "GeneralHealthManagerInfo",
+            {
+                "Indicates a general amd-health-mgr informational log",
+                "amd-health-mgr: %1.",
+                "OK",
+                1,
+                {
+                    "string",
+                },
+                "None.",
+            }},
     MessageEntry{
         "IPMIWatchdog",
         {
