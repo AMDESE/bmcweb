@@ -1331,38 +1331,11 @@ inline void getSoftwareVersion(
         });
 }
 
-inline void handleUpdateServiceFirmwareInventoryGet(
-    App& app, const crow::Request& req,
-    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& param)
+inline void processUpdateServiceFirmwareInventoryGet(
+	uint16_t hostNumber,
+	const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+	const std::string& param)
 {
-    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
-    {
-        return;
-    }
-
-    boost::urls::url_view urlView = req.url();
-    uint16_t hostNumber;
-
-    for (const auto& parameter : urlView.params())
-    {
-        if (parameter.key == "HostNumber" && !parameter.value.empty())
-        {
-            try
-            {
-                int temp = std::stoi(std::string(parameter.value));
-                hostNumber = static_cast<uint16_t>(temp);
-            }
-            catch (const std::exception& e)
-            {
-                BMCWEB_LOG_WARNING("Invalid HostNumber format: {}",
-                                   parameter.value);
-                hostNumber = 0;
-            }
-            break;
-        }
-    }
-
     if (hostNumber > 2)
     {
         messages::actionParameterNotSupported(
@@ -1441,6 +1414,74 @@ inline void handleUpdateServiceFirmwareInventoryGet(
             asyncResp->res.jsonValue["Updateable"] = false;
             sw_util::getSwUpdatableStatus(asyncResp, swId);
         });
+}
+
+void getBootMode(
+	uint16_t hostNumber,
+	const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+	const std::string& param)
+{
+	sdbusplus::asio::getProperty<uint16_t>
+		(*crow::connections::systemBus,
+			"xyz.openbmc_project.Settings",
+			"/xyz/openbmc_project/control/HostMode",
+			"xyz.openbmc_project.Control.HostMode",
+			"CurrentMode",
+			[hostNumber, asyncResp, param](const boost::system::error_code& ec, const uint16_t& bmode) {
+				if (ec) {
+					BMCWEB_LOG_ERROR("Current boot mode error: {}", ec.message());
+					messages::internalError(asyncResp->res);
+					return;
+				}
+
+				if (bmode == 1) {
+					BMCWEB_LOG_ERROR("Invalid HostNumber {} for the mode {}", hostNumber, bmode);
+					messages::actionParameterNotSupported(
+						asyncResp->res, std::to_string(hostNumber), "HostNumber");
+					return;
+				}
+				BMCWEB_LOG_DEBUG("boot mode: {}", bmode);
+			}
+		);
+}
+
+inline void handleUpdateServiceFirmwareInventoryGet(
+    App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& param)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+
+    boost::urls::url_view urlView = req.url();
+    uint16_t hostNumber = 0;
+
+    for (const auto& parameter : urlView.params()) {
+	if (parameter.key == "HostNumber") {
+		if (!parameter.value.empty()) {
+			try {
+				int temp = std::stoi(std::string(parameter.value));
+				hostNumber = static_cast<uint16_t>(temp);
+				if (hostNumber == 0)
+					getBootMode(hostNumber, asyncResp, param);
+			}
+			catch (const std::exception& e) {
+				BMCWEB_LOG_ERROR("Invalid HostNumber format: {}", parameter.value);
+				messages::actionParameterValueFormatError(
+					asyncResp->res, parameter.value, "HostNumber", "");
+				return;
+			}
+		} else {
+			BMCWEB_LOG_ERROR("Missing HostNumber");
+			messages::actionParameterMissing(asyncResp->res, "HostNumber", "");
+			return;
+		}
+	}
+    }
+
+    processUpdateServiceFirmwareInventoryGet(hostNumber, asyncResp, param);
 }
 
 inline void requestRoutesUpdateService(App& app)
