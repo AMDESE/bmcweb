@@ -95,6 +95,7 @@ inline void
     asyncResp->res.jsonValue["@Redfish.Settings"]["SettingsObject"] = {
         {"@odata.id", "/redfish/v1/Systems/system/Bios/SD"}};
     asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
+    asyncResp->res.jsonValue["AttributeRegistry"] = "BiosAttributeRegistry";
     asyncResp->res.jsonValue["Description"] = "BIOS Configuration Service";
     asyncResp->res.jsonValue["Id"] = "BIOS";
     asyncResp->res.jsonValue["Actions"]["#Bios.ResetBios"]["target"] =
@@ -526,6 +527,71 @@ inline void requestRoutesBiosSettings(App& app)
         .privileges(redfish::privileges::getBios)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handleBiosSettingsGet, std::ref(app)));
+}
+
+inline void handleBiosAttributeRegistryGet(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem", systemName);
+        return;
+    }
+
+    nlohmann::ordered_json orderedRes;
+
+    orderedRes["@odata.type"] = "#AttributeRegistry.v1_3_2.AttributeRegistry";
+    orderedRes["Id"] = "BiosAttributeRegistry";
+    orderedRes["Name"] = "BIOS Attribute Registry";
+    orderedRes["Language"] = "en";
+    orderedRes["RegistryVersion"] = "1.4.0";
+    orderedRes["RegistryPrefix"] = "BiosAttributeRegistry";
+    orderedRes["AttributeRegistry"] = nlohmann::json::object();
+
+    asyncResp->res.write(orderedRes.dump(2));
+}
+
+inline void requestRoutesBiosAttributeRegistry(App& app)
+{
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Bios/BiosAttributeRegistry")
+        .privileges(redfish::privileges::getBios)
+        .methods(boost::beast::http::verb::get)(
+            std::bind_front(handleBiosAttributeRegistryGet, std::ref(app)));
+}
+
+inline void handleBiosAttributeRegistryMetadataGet(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+
+    asyncResp->res.jsonValue["@odata.type"] = "#MessageRegistryFile.v1_1_0.MessageRegistryFile";
+    asyncResp->res.jsonValue["@odata.id"] = "/redfish/v1/Registries/BiosAttributeRegistry";
+    asyncResp->res.jsonValue["Id"] = "BiosAttributeRegistry";
+    asyncResp->res.jsonValue["Name"] = "BIOS Attribute Registry File";
+    asyncResp->res.jsonValue["Description"] = "BIOS Attribute Registry File Location";
+    asyncResp->res.jsonValue["Registry"] = "BiosAttributeRegistry.1.4.0";
+    asyncResp->res.jsonValue["Languages"] = {"en"};
+    asyncResp->res.jsonValue["Languages@odata.count"] = 1;
+
+    nlohmann::json::array_t location;
+    nlohmann::json::object_t obj;
+    obj["Language"] = "en";
+    obj["Uri"] = boost::urls::format("/redfish/v1/Systems/{}/Bios/BiosAttributeRegistry",
+                     BMCWEB_REDFISH_SYSTEM_URI_NAME);
+    location.emplace_back(std::move(obj));
+    asyncResp->res.jsonValue["Location"] = std::move(location);
+    asyncResp->res.jsonValue["Location@odata.count"] = 1;
 }
 
 } // namespace redfish
