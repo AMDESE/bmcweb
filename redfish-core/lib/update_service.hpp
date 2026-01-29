@@ -153,6 +153,48 @@ inline void activateImage(const std::string& objPath,
         });
 }
 
+inline std::optional<uint16_t> parseBiosTarget(
+    const boost::urls::url_view& urlView)
+{
+    for (const auto& param : urlView.params())
+    {
+        if (param.key == "BiosTarget" && !param.value.empty())
+        {
+            try
+            {
+                std::string value = std::string(param.value);
+                std::transform(value.begin(), value.end(), value.begin(),
+                               [](unsigned char c) {
+                                   return static_cast<char>(std::toupper(c));
+                               });
+                if (value == "P0" || value == "P0_LOCAL")
+                {
+                    return 0;
+                }
+                if (value == "P1" || value == "P1_REMOTE")
+                {
+                    return 2;
+                }
+                if (value == "RP0" || value == "P0_REMOTE")
+                {
+                    return 3;
+                }
+                if (value == "LP1" || value == "P1_LOCAL")
+                {
+                    return 4;
+                }
+            }
+            catch (const std::exception& e)
+            {
+                BMCWEB_LOG_WARNING("Invalid BiosTarget format: {}",
+                                   param.value);
+            }
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
 inline bool handleCreateTask(const boost::system::error_code& ec2,
                              sdbusplus::message_t& msg,
                              const std::shared_ptr<task::TaskData>& taskData)
@@ -471,7 +513,7 @@ inline void monitorForSoftwareAvailable(
     }
 
     boost::urls::url_view urlView = req.url();
-    uint16_t hostNumber;
+    uint16_t hostNumber = 0;
 
     for (const auto& param : urlView.params())
     {
@@ -492,10 +534,16 @@ inline void monitorForSoftwareAvailable(
         }
     }
 
-    if (hostNumber > 2)
+    std::optional<uint16_t> biosTarget = parseBiosTarget(urlView);
+    if (biosTarget)
+    {
+        hostNumber = *biosTarget;
+    }
+    else if (hostNumber > 2)
     {
         messages::actionParameterNotSupported(
             asyncResp->res, std::to_string(hostNumber), "HostNumber");
+        return;
     }
 
     fwAvailableTimer =
@@ -1342,7 +1390,7 @@ inline void handleUpdateServiceFirmwareInventoryGet(
     }
 
     boost::urls::url_view urlView = req.url();
-    uint16_t hostNumber;
+    uint16_t hostNumber = 0;
 
     for (const auto& parameter : urlView.params())
     {
@@ -1363,10 +1411,16 @@ inline void handleUpdateServiceFirmwareInventoryGet(
         }
     }
 
-    if (hostNumber > 2)
+    std::optional<uint16_t> biosTarget = parseBiosTarget(urlView);
+    if (biosTarget)
+    {
+        hostNumber = *biosTarget;
+    }
+    else if (hostNumber > 2)
     {
         messages::actionParameterNotSupported(
             asyncResp->res, std::to_string(hostNumber), "HostNumber");
+        return;
     }
 
     std::shared_ptr<std::string> swId = std::make_shared<std::string>(param);
