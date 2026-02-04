@@ -1698,10 +1698,12 @@ inline bool isAllowedIP(const crow::Request& req)
 {
     std::string ipStr = req.ipAddress.to_string();
     // IP of the USB vNIC
-    constexpr std::string_view allowedIp = "192.168.31.2";
+    constexpr std::string_view allowedIp1 = "192.168.31.1";
+    constexpr std::string_view allowedIp2 = "192.168.31.2";
 
     // Check if the IP string contains the allowed IP
-    if (ipStr.find(allowedIp) == std::string::npos)
+    if (ipStr.find(allowedIp1) == std::string::npos &&
+        ipStr.find(allowedIp2) == std::string::npos)
     {
         BMCWEB_LOG_ERROR("Unmatched IP: {} ", ipStr);
         return false;
@@ -1829,6 +1831,20 @@ inline void requestRoutesJournalEventLogEntryPost(App& app)
                                 redfishMessageId.c_str(),
                                 "REDFISH_MESSAGE_ARGS=%s",
                                 redfishMessageArgs.c_str(), NULL);
+                std::string mesg =
+                    "MESSAGE=" + message + ", " +
+                    "PRIORITY=" + std::to_string(severityNumber) + ", " +
+                    "REDFISH_MESSAGE_ID=" + redfishMessageId + ", " +
+                    "REDFISH_MESSAGE_ARGS=" + redfishMessageArgs;
+
+                // Add AdditionalData fields
+                for (const auto& [key, value] : additionalData)
+                {
+                    mesg = mesg + ", " + key + "=" + value;
+                }
+
+                BMCWEB_LOG_ERROR("Redfish Event logged; EVENT: {}", mesg);
+
                 messages::success(asyncResp->res);
             });
 }
