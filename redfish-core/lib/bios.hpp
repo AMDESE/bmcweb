@@ -61,6 +61,28 @@ inline BiosAttrMap JsonToBiosAttributes(const nlohmann::json& j)
 
     return iMap;
 }
+
+/**
+ * @brief  Check for allowed IP Addresses for usbvNic interface
+ *
+ **/
+inline bool isAllowedIpAddress(const crow::Request& req)
+{
+    const std::string ipStr = req.ipAddress.to_string();
+
+    constexpr std::string_view usbVnic1 = "::ffff:192.168.31.1";
+    constexpr std::string_view usbVnic2 = "::ffff:192.168.31.2";
+
+    if (ipStr == usbVnic1 || ipStr == usbVnic2)
+    {
+        BMCWEB_LOG_WARNING(
+                "Reject request from usbvNIC");
+        return false;
+    }
+
+    return true;
+}
+
 /**
  * @brief  Retrieves all CBS attributes data over DBus function
  *
@@ -101,9 +123,13 @@ inline void
         std::format("/redfish/v1/Systems/{}/Bios/Actions/Bios.ResetBios",
                     BMCWEB_REDFISH_SYSTEM_URI_NAME);
 
-    // Get the ActiveSoftwareImage and SoftwareImages
-    sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
-                                         true);
+    if (isAllowedIpAddress(req))
+    {
+        // Get the ActiveSoftwareImage and SoftwareImages
+        sw_util::populateSoftwareInformation(asyncResp, sw_util::biosPurpose, "",
+                                          true);
+    }
+
     asyncResp->res.jsonValue["Attributes"] = nlohmann::json::object();
 
     crow::connections::systemBus->async_method_call(
