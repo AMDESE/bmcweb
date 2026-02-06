@@ -436,11 +436,48 @@ inline void handleBiosResetPost(
         return;
     }
 
+    std::string hostStr = "0";
+    boost::urls::url_view urlView = req.url();
+
+    // Extract HostNumber from the parameter list, otherwise it's 0
+    for (const auto& param : urlView.params())
+    {
+        if (param.key == "HostNumber" && !param.value.empty())
+            try
+            {
+                hostStr = std::string(param.value);
+            }
+            catch (const std::exception& e)
+            {
+                BMCWEB_LOG_WARNING("Invalid HostNumber format: {}",
+                                   param.value);
+                return;
+            }
+    }
+
+    // convert host string to argument for the cmos reset script
+    if (hostStr == "0")
+    {
+        hostStr = "1";
+    }
+    else if (hostStr == "1")
+    {
+        hostStr = "2";
+    }
+    else
+    {
+        BMCWEB_LOG_ERROR("Failed to clear CMOS: invalid parameter passed");
+        messages::internalError(asyncResp->res);
+        return;
+    }
+
     crow::connections::systemBus->async_method_call(
-        [asyncResp](const boost::system::error_code& ec) {
+        [asyncResp, hostStr](const boost::system::error_code& ec) {
             if (ec)
             {
-                int systemRet = system("/sbin/amd-clear-cmos.sh Y  &");
+                std::string cmd =
+                    std::format("/sbin/amd-clear-cmos.sh Y {} &", hostStr);
+                int systemRet = system(cmd.c_str());
                 if (systemRet == -1)
                 {
                     BMCWEB_LOG_ERROR("Failed to clear CMOS");
