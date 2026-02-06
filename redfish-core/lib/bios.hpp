@@ -16,15 +16,13 @@
 
 #include <boost/beast/http/verb.hpp>
 
-#include <format>
-#include <functional>
-#include <memory>
-#include <string>
-
 #include <array>
 #include <cstddef>
+#include <format>
+#include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -87,10 +85,10 @@ inline bool isAllowedIpAddress(const crow::Request& req)
  * @brief  Retrieves all CBS attributes data over DBus function
  *
  **/
-inline void
-    handleBiosServiceGet(crow::App& app, const crow::Request& req,
-                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                         const std::string& systemName)
+inline void handleBiosServiceGet(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -134,72 +132,76 @@ inline void
 
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec, BiosAttrMap& newtable) {
-        if (ec)
-        {
-            BMCWEB_LOG_ERROR("GET - GetBiosAttribute D-Bus responses error: {}",
-                             ec);
-            messages::internalError(asyncResp->res);
-            return;
-        }
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR(
+                    "GET - GetBiosAttribute D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
 
-        nlohmann::json jsonObject;
-        for (const auto& [key, value] : newtable)
-        {
-            std::visit([&jsonObject, &key](const auto& val) {
-                jsonObject[key] = val;
-            }, value);
-        }
-        if (!jsonObject.is_null())
-        {
-            asyncResp->res.jsonValue["Attributes"] = jsonObject;
-        }
-        messages::success(asyncResp->res);
-        return;
-    }, "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+            nlohmann::json jsonObject;
+            for (const auto& [key, value] : newtable)
+            {
+                std::visit([&jsonObject,
+                            &key](const auto& val) { jsonObject[key] = val; },
+                           value);
+            }
+            if (!jsonObject.is_null())
+            {
+                asyncResp->res.jsonValue["Attributes"] = jsonObject;
+            }
+            messages::success(asyncResp->res);
+            return;
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "GetBiosAttribute");
 }
 
-inline void
-    setPendingAttributes(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                         const BiosAttrMap& patchMap)
+inline void setPendingAttributes(
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const BiosAttrMap& patchMap)
 {
     // now do the get the persistent value
     crow::connections::systemBus->async_method_call(
         [asyncResp, patchMap](const boost::system::error_code ec,
                               BiosAttrMap& PendingAttrData) {
-        if (ec)
-        {
-            BMCWEB_LOG_ERROR(
-                "setPendingAttributes - patch Get D-Bus responses error: {}",
-                ec);
-            messages::internalError(asyncResp->res);
-            return;
-        }
-
-        for (const auto& [key, value] : patchMap)
-        {
-            // This will insert the key if it doesn't exist,
-            // or update the value if it does.
-            PendingAttrData[key] = value;
-        }
-
-        // make dbus call transfer the data
-        crow::connections::systemBus->async_method_call(
-            [asyncResp](const boost::system::error_code ec1) {
-            if (ec1)
+            if (ec)
             {
                 BMCWEB_LOG_ERROR(
-                    "setPendingAttributes - D-Bus responses error: {}", ec1);
+                    "setPendingAttributes - patch Get D-Bus responses error: {}",
+                    ec);
                 messages::internalError(asyncResp->res);
                 return;
             }
-            BMCWEB_LOG_DEBUG("setPendingAttributes -  Dbus call pass ");
-            messages::success(asyncResp->res);
-            return;
-        }, "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
-            "xyz.openbmc_project.PCIe.PcieData", "SetPendingAttribute",
-            PendingAttrData);
-    },
+
+            for (const auto& [key, value] : patchMap)
+            {
+                // This will insert the key if it doesn't exist,
+                // or update the value if it does.
+                PendingAttrData[key] = value;
+            }
+
+            // make dbus call transfer the data
+            crow::connections::systemBus->async_method_call(
+                [asyncResp](const boost::system::error_code ec1) {
+                    if (ec1)
+                    {
+                        BMCWEB_LOG_ERROR(
+                            "setPendingAttributes - D-Bus responses error: {}",
+                            ec1);
+                        messages::internalError(asyncResp->res);
+                        return;
+                    }
+                    BMCWEB_LOG_DEBUG("setPendingAttributes -  Dbus call pass ");
+                    messages::success(asyncResp->res);
+                    return;
+                },
+                "xyz.openbmc_project.PCIe",
+                "/xyz/openbmc_project/inventory/PCIe",
+                "xyz.openbmc_project.PCIe.PcieData", "SetPendingAttribute",
+                PendingAttrData);
+        },
         "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "GetPendingAttribute");
 }
@@ -208,23 +210,25 @@ inline void
  * @brief Persist all CBS attributes data over DBus function
  *
  **/
-inline void
-    setBiosAttributes(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                      const BiosAttrMap& table)
+inline void setBiosAttributes(
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const BiosAttrMap& table)
 {
     // make dbus call transfer the data
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
-        if (ec)
-        {
-            BMCWEB_LOG_DEBUG("SetBiosAttribute D-Bus responses error: {}", ec);
-            messages::internalError(asyncResp->res);
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("SetBiosAttribute D-Bus responses error: {}",
+                                 ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+            asyncResp->res.jsonValue["status"] = "ok";
             return;
-        }
-        messages::success(asyncResp->res);
-        asyncResp->res.jsonValue["status"] = "ok";
-        return;
-    }, "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "SetBiosAttribute", table);
 }
 
@@ -232,10 +236,10 @@ inline void
  * @brief Serve Patch request on CBS attributes data over DBus
  *
  **/
-inline void
-    handleBiosServicePatch(crow::App& app, const crow::Request& req,
-                           const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                           const std::string& systemName)
+inline void handleBiosServicePatch(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -249,8 +253,8 @@ inline void
         return;
     }
     // validation -check if any CBS is available to do patch
-    nlohmann::json bJsonPatchObject = nlohmann::json::parse(req.body(), nullptr,
-                                                            false);
+    nlohmann::json bJsonPatchObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
     if (!bJsonPatchObject.contains("Attributes"))
     {
         asyncResp->res.jsonValue["message"] = "Not valid input";
@@ -269,50 +273,50 @@ inline void
 
     // now do the get the persistent value
     crow::connections::systemBus->async_method_call(
-        [asyncResp, patchMap](const boost::system::error_code ec,
-                              BiosAttrMap& allData) {
-        if (ec)
-        {
-            BMCWEB_LOG_DEBUG(
-                "PATCH - GetBiosAttribute D-Bus responses error: {}", ec);
-            messages::internalError(asyncResp->res);
-            return;
-        }
-        // first get all cbs data
-        if (allData.size() == 0)
-        {
-            asyncResp->res.jsonValue["message"] = "No CBS data to patch";
-            asyncResp->res.jsonValue["status"] = "error";
-            return;
-        }
-        bool status = true;
-        // validation - Iterate through all keys from patchMap
-        // and check if key present or not in original cbs data
-        for (const auto& [key, value] : patchMap)
-        {
-            // If key exists in allData, update it
-            if (allData.find(key) != allData.end())
+        [asyncResp,
+         patchMap](const boost::system::error_code ec, BiosAttrMap& allData) {
+            if (ec)
             {
-                allData[key] = value;
+                BMCWEB_LOG_DEBUG(
+                    "PATCH - GetBiosAttribute D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            // first get all cbs data
+            if (allData.size() == 0)
+            {
+                asyncResp->res.jsonValue["message"] = "No CBS data to patch";
+                asyncResp->res.jsonValue["status"] = "error";
+                return;
+            }
+            bool status = true;
+            // validation - Iterate through all keys from patchMap
+            // and check if key present or not in original cbs data
+            for (const auto& [key, value] : patchMap)
+            {
+                // If key exists in allData, update it
+                if (allData.find(key) != allData.end())
+                {
+                    allData[key] = value;
+                }
+                else
+                {
+                    status = false;
+                }
+            }
+            if (status)
+            {
+                // setBiosAttributes(asyncResp, allData);
+                setPendingAttributes(asyncResp, patchMap);
+                messages::success(asyncResp->res);
+                asyncResp->res.jsonValue["status"] = "ok";
             }
             else
             {
-                status = false;
+                asyncResp->res.jsonValue["message"] = "Invalid Key to patch";
+                asyncResp->res.jsonValue["status"] = "error";
             }
-        }
-        if (status)
-        {
-            // setBiosAttributes(asyncResp, allData);
-            setPendingAttributes(asyncResp, patchMap);
-            messages::success(asyncResp->res);
-            asyncResp->res.jsonValue["status"] = "ok";
-        }
-        else
-        {
-            asyncResp->res.jsonValue["message"] = "Invalid Key to patch";
-            asyncResp->res.jsonValue["status"] = "error";
-        }
-    },
+        },
         "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "GetBiosAttribute");
 }
@@ -321,10 +325,10 @@ inline void
  * @brief Serve POST request on CBS attributes data over DBus
  *
  **/
-inline void
-    handleBiosServicePost(crow::App& app, const crow::Request& req,
-                          const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                          const std::string& systemName)
+inline void handleBiosServicePost(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -346,8 +350,8 @@ inline void
         return;
     }
 
-    nlohmann::json biosPostJsonObject = nlohmann::json::parse(req.body(),
-                                                              nullptr, false);
+    nlohmann::json biosPostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
     if (!biosPostJsonObject.contains("Attributes"))
     {
         asyncResp->res.jsonValue["message"] = "Not valid input";
@@ -364,10 +368,10 @@ inline void
  * @brief Serve PUT request on CBS attributes data over DBus
  *
  **/
-inline void
-    handleBiosServicePut(crow::App& app, const crow::Request& req,
-                         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                         const std::string& systemName)
+inline void handleBiosServicePut(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -389,8 +393,8 @@ inline void
         return;
     }
 
-    nlohmann::json biosPostJsonObject = nlohmann::json::parse(req.body(),
-                                                              nullptr, false);
+    nlohmann::json biosPostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
     if (!biosPostJsonObject.contains("Attributes"))
     {
         asyncResp->res.jsonValue["message"] = "Not valid input";
@@ -460,17 +464,18 @@ inline void handleBiosResetPost(
 
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code& ec) {
-        if (ec)
-        {
-            int systemRet = system("/sbin/amd-clear-cmos.sh Y  &");
-            if (systemRet == -1)
+            if (ec)
             {
-                BMCWEB_LOG_ERROR("Failed to clear CMOS");
-                messages::internalError(asyncResp->res);
+                int systemRet = system("/sbin/amd-clear-cmos.sh Y  &");
+                if (systemRet == -1)
+                {
+                    BMCWEB_LOG_ERROR("Failed to clear CMOS");
+                    messages::internalError(asyncResp->res);
+                }
+                return;
             }
-            return;
-        }
-    }, "org.open_power.Software.Host.Updater", "/xyz/openbmc_project/software",
+        },
+        "org.open_power.Software.Host.Updater", "/xyz/openbmc_project/software",
         "xyz.openbmc_project.Common.FactoryReset", "Reset");
 }
 
@@ -485,10 +490,10 @@ inline void requestRoutesBiosReset(App& app)
 /**
  *  BiosSettingsGet method to support settings for pending cbs
  */
-inline void
-    handleBiosSettingsGet(crow::App& app, const crow::Request& req,
-                          const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                          const std::string& systemName)
+inline void handleBiosSettingsGet(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
 {
     if (!redfish::setUpRedfishRoute(app, req, asyncResp))
     {
@@ -517,29 +522,29 @@ inline void
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec,
                     BiosAttrMap& PendingAttrData) {
-        if (ec)
-        {
-            BMCWEB_LOG_ERROR(
-                "setPendingAttributes - patch Get D-Bus responses error: {}",
-                ec);
-            messages::internalError(asyncResp->res);
-            return;
-        }
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR(
+                    "setPendingAttributes - patch Get D-Bus responses error: {}",
+                    ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
 
-        nlohmann::json jsonObject;
-        for (const auto& [key, value] : PendingAttrData)
-        {
-            std::visit([&jsonObject, &key](const auto& val) {
-                jsonObject[key] = val;
-            }, value);
-        }
-        if (!jsonObject.is_null())
-        {
-            asyncResp->res.jsonValue["Attributes"] = jsonObject;
-        }
-        messages::success(asyncResp->res);
-        return;
-    },
+            nlohmann::json jsonObject;
+            for (const auto& [key, value] : PendingAttrData)
+            {
+                std::visit([&jsonObject,
+                            &key](const auto& val) { jsonObject[key] = val; },
+                           value);
+            }
+            if (!jsonObject.is_null())
+            {
+                asyncResp->res.jsonValue["Attributes"] = jsonObject;
+            }
+            messages::success(asyncResp->res);
+            return;
+        },
         "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "GetPendingAttribute");
 
