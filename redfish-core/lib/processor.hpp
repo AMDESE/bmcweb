@@ -1375,6 +1375,12 @@ inline void requestRoutesProcessor(App& app)
                 "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/SocConfiguration/Token",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
 
+            // Add ProcessorMetrics sub-resource link
+            asyncResp->res.jsonValue["Oem"]["AMD"]["ProcessorMetrics"]
+                                    ["@odata.id"] = boost::urls::format(
+                "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/ProcessorMetrics",
+                BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
+
             getProcessorObject(
                 asyncResp, processorId,
                 std::bind_front(getProcessorData, asyncResp, processorId));
@@ -1552,5 +1558,145 @@ inline void requestRoutesOobErrorInjection(App& app)
                     errorInjectionInterface, "GetOobErrorTypes");
             });
 };
+
+inline void requestRoutesProcessorMetrics(App& app)
+{
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Systems/<str>/Processors/<str>/Oem/AMD/ProcessorMetrics")
+        .privileges(redfish::privileges::getProcessor)
+        .methods(
+            boost::beast::http::verb::
+                get)([&app](const crow::Request& req,
+                            const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                            const std::string& systemName,
+                            const std::string& processorId) {
+            if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+            {
+                return;
+            }
+
+            if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+            {
+                messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                           systemName);
+                return;
+            }
+
+            if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+            {
+                messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                           systemName);
+                return;
+            }
+
+            // Determine socket prefix (P0, P1, ...) from processorId.
+            // processorId is expected to end with a digit, e.g. "cpu0",
+            // "cpu1", "P0", "P1".
+            std::string socketNum;
+            for (auto it = processorId.rbegin(); it != processorId.rend(); ++it)
+            {
+                if (std::isdigit(static_cast<unsigned char>(*it)))
+                {
+                    socketNum.insert(socketNum.begin(), *it);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            if (socketNum.empty())
+            {
+                messages::resourceNotFound(asyncResp->res, "Processor",
+                                           processorId);
+                return;
+            }
+
+            std::string prefix = "P" + socketNum;
+
+            asyncResp->res.jsonValue["@odata.type"] =
+                "#AmdProcessorMetrics.AmdProcessorMetrics";
+            asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
+                "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/ProcessorMetrics",
+                BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
+            asyncResp->res.jsonValue["Id"] = "ProcessorMetrics";
+            asyncResp->res.jsonValue["Name"] =
+                prefix + " Processor Error Metrics";
+
+            std::string correctableCpuProp = prefix + "CorrectableCPUErrors";
+            std::string correctableOtherProp =
+                prefix + "CorrectableOtherErrors";
+            std::string noncorrectableCpuProp =
+                prefix + "NoncorrectableCPUErrors";
+            std::string noncorrectableOtherProp =
+                prefix + "NoncorrectableOtherErrors";
+
+            std::string rasService = "com.amd.RAS" + socketNum;
+
+            crow::connections::systemBus->async_method_call(
+                [asyncResp, correctableCpuProp, correctableOtherProp,
+                 noncorrectableCpuProp, noncorrectableOtherProp](
+                    const boost::system::error_code& ec,
+                    const dbus::utility::DBusPropertiesMap& properties) {
+                    if (ec)
+                    {
+                        BMCWEB_LOG_ERROR(
+                            "D-Bus error reading RAS ErrorCount: {}", ec);
+                        messages::internalError(asyncResp->res);
+                        return;
+                    }
+
+                    for (const auto& [propName, propValue] : properties)
+                    {
+                        if (propName == correctableCpuProp)
+                        {
+                            const std::vector<uint64_t>* val =
+                                std::get_if<std::vector<uint64_t>>(&propValue);
+                            if (val != nullptr)
+                            {
+                                asyncResp->res
+                                    .jsonValue["CorrectableCPUErrors"] = *val;
+                            }
+                        }
+                        else if (propName == correctableOtherProp)
+                        {
+                            const uint64_t* val =
+                                std::get_if<uint64_t>(&propValue);
+                            if (val != nullptr)
+                            {
+                                asyncResp->res
+                                    .jsonValue["CorrectableOtherErrors"] = *val;
+                            }
+                        }
+                        else if (propName == noncorrectableCpuProp)
+                        {
+                            const std::vector<uint64_t>* val =
+                                std::get_if<std::vector<uint64_t>>(&propValue);
+                            if (val != nullptr)
+                            {
+                                asyncResp->res
+                                    .jsonValue["NoncorrectableCPUErrors"] =
+                                    *val;
+                            }
+                        }
+                        else if (propName == noncorrectableOtherProp)
+                        {
+                            const uint64_t* val =
+                                std::get_if<uint64_t>(&propValue);
+                            if (val != nullptr)
+                            {
+                                asyncResp->res
+                                    .jsonValue["NoncorrectableOtherErrors"] =
+                                    *val;
+                            }
+                        }
+                    }
+                },
+                rasService, "/com/amd/RAS/ErrorCount",
+                "org.freedesktop.DBus.Properties", "GetAll",
+                "com.amd.RAS.ErrorCount");
+        });
+}
 
 } // namespace redfish
