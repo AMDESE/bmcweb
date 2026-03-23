@@ -3508,6 +3508,7 @@ inline void requestRoutesCrashdumpConfig(App& app)
             std::optional<int64_t> PcieAerPollingPeriod;
             std::optional<int64_t> DramCeccErrThresholdCnt;
             std::optional<int64_t> McaErrThresholdCnt;
+            std::optional<int64_t> McaUmcErrThresholdCnt;
             std::optional<int64_t> PcieAerErrThresholdCnt;
 
             if (!redfish::json_util::readJsonAction(
@@ -3528,6 +3529,7 @@ inline void requestRoutesCrashdumpConfig(App& app)
                     "PcieAerPollingPeriod", PcieAerPollingPeriod,
                     "DramCeccErrThresholdCnt", DramCeccErrThresholdCnt,
                     "McaErrThresholdCnt", McaErrThresholdCnt,
+                    "McaUmcErrThresholdCnt", McaUmcErrThresholdCnt,
                     "PcieAerErrThresholdCnt", PcieAerErrThresholdCnt))
             {
                 return;
@@ -3854,6 +3856,22 @@ inline void requestRoutesCrashdumpConfig(App& app)
                     serviceName, "/com/amd/RAS", "com.amd.RAS.Configuration",
                     "SetAttribute", "McaErrThresholdCnt",
                     std::variant<int64_t>(*McaErrThresholdCnt));
+            }
+            if (McaUmcErrThresholdCnt)
+            {
+                crow::connections::systemBus->async_method_call(
+                    [asyncResp](const boost::system::error_code ec) {
+                        if (ec)
+                        {
+                            messages::internalError(asyncResp->res);
+                            return;
+                        }
+                        messages::success(asyncResp->res);
+                        return;
+                    },
+                    serviceName, "/com/amd/RAS", "com.amd.RAS.Configuration",
+                    "SetAttribute", "McaUmcErrThresholdCnt",
+                    std::variant<int64_t>(*McaUmcErrThresholdCnt));
             }
             if (PcieAerErrThresholdCnt)
             {
