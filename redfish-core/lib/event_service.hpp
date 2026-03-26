@@ -17,6 +17,7 @@
 #include "registries.hpp"
 #include "registries/privilege_registry.hpp"
 #include "snmp_trap_event_clients.hpp"
+#include "str_utility.hpp"
 #include "subscription.hpp"
 #include "utils/json_utils.hpp"
 
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <format>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -629,39 +631,81 @@ inline void requestRoutesEventDestinationCollection(App& app)
 
             if (msgIds)
             {
-                std::vector<std::string> registryPrefix;
+                // Validation at the top of this handler ensures
+                // RegistryPrefixes and MessageIds cannot both be
+                // non-empty, so registryPrefixes is always empty here.
+                // Use all supported prefixes for registry lookup.
+                std::vector<std::string> registryPrefix(
+                    supportedRegPrefixes.begin(),
+                    supportedRegPrefixes.end());
 
-                // If no registry prefixes are mentioned, consider all
-                // supported prefixes
-                if (subValue->userSub->registryPrefixes.empty())
-                {
-                    registryPrefix.assign(supportedRegPrefixes.begin(),
-                                          supportedRegPrefixes.end());
-                }
-                else
-                {
-                    registryPrefix = subValue->userSub->registryPrefixes;
-                }
-
+                std::vector<std::string> qualifiedMsgIds;
                 for (const std::string& id : *msgIds)
                 {
                     bool validId = false;
 
+                    // MessageIds may be in one of three formats:
+                    //   - Bare key: "PostComplete"
+                    //   - 2-part:   "OpenBMC.PostComplete"
+                    //   - 4-part:   "OpenBMC.0.1.PostComplete"
+                    // Parse using '.' split to extract registry and
+                    // message key, matching getRegistryAndMessageKey().
+                    std::string idRegistry;
+                    std::string idMsgKey;
+                    std::vector<std::string> fields;
+                    fields.reserve(4);
+                    bmcweb::split(fields, id, '.');
+                    if (fields.size() == 4)
+                    {
+                        // Registry.Major.Minor.MessageKey
+                        idRegistry = fields[0];
+                        idMsgKey = fields[3];
+                    }
+                    else if (fields.size() == 2)
+                    {
+                        // Registry.MessageKey
+                        idRegistry = fields[0];
+                        idMsgKey = fields[1];
+                    }
+                    else if (fields.size() == 1)
+                    {
+                        // Bare MessageKey
+                        idMsgKey = fields[0];
+                    }
+                    else
+                    {
+                        messages::propertyValueNotInList(
+                            asyncResp->res, id, "MessageIds");
+                        return;
+                    }
+
                     // Check for Message ID in each of the selected Registry
                     for (const std::string& it : registryPrefix)
                     {
+                        // If a registry prefix was specified in the
+                        // MessageId, only search that registry
+                        if (!idRegistry.empty() && idRegistry != it)
+                        {
+                            continue;
+                        }
+
                         const registries::MessageEntries registry =
                             redfish::registries::getRegistryMessagesFromPrefix(
                                 it);
 
                         if (std::ranges::any_of(
                                 registry,
-                                [&id](const redfish::registries::MessageEntry&
-                                          messageEntry) {
-                                    return id == messageEntry.first;
+                                [&idMsgKey](
+                                    const redfish::registries::MessageEntry&
+                                        messageEntry) {
+                                    return idMsgKey == messageEntry.first;
                                 }))
                         {
                             validId = true;
+                            // Store as "RegistryPrefix.MessageKey" to match
+                            // the format used by eventMatchesFilter()
+                            qualifiedMsgIds.emplace_back(
+                                std::format("{}.{}", it, idMsgKey));
                             break;
                         }
                     }
@@ -674,7 +718,8 @@ inline void requestRoutesEventDestinationCollection(App& app)
                     }
                 }
 
-                subValue->userSub->registryMsgIds = *msgIds;
+                subValue->userSub->registryMsgIds =
+                    std::move(qualifiedMsgIds);
             }
 
             if (retryPolicy)

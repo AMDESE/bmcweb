@@ -245,9 +245,6 @@ FilesystemLogWatcher::FilesystemLogWatcher(boost::asio::io_context& ioc) :
     // monitor redfish event log file
     watchRedfishEventLogFile();
 
-    if (redfishLogFilePosition != 0)
-    {
-        cacheRedfishLogFile();
-    }
+    cacheRedfishLogFile();
 }
 } // namespace redfish
