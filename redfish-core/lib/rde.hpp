@@ -14,6 +14,8 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <sstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,12 @@ constexpr const char* rdeSignalInterface =
 constexpr const char* rdeManagerPath = "/xyz/openbmc_project/RDE/Manager";
 constexpr const char* rdeManagerInterface = "xyz.openbmc_project.RDE.Manager";
 constexpr const char* rdeOperationMethod = "StartRedfishOperation";
+constexpr const char* rdeCacheManagerPath = "/xyz/openbmc_project/RDE/CacheManager";
+constexpr const char* rdeCacheManagerInterface =
+    "xyz.openbmc_project.RDE.CacheManager";
+constexpr const char* rdeGetCurrentCacheMethod = "GetCurrentCache";
+constexpr const char* socConfigurationTokenSubUri =
+    "Oem/AMD/SocConfiguration/Token";
 constexpr const char* rdeOperationTypeRead =
     "xyz.openbmc_project.RDE.Common.OperationType.READ";
 constexpr const char* rdeOperationTypePatch =
@@ -304,6 +312,87 @@ inline void rdeCreateTask(task::Payload&& payload,
 
     task->startTimer(std::chrono::minutes(rdeTaskTimeoutMinutes));
     task->payload.emplace(std::move(payload));
+}
+
+inline bool parseSocConfigurationPatchPayload(const crow::Request& request,
+                                              crow::Response& response,
+                                              nlohmann::json& jsonPayload)
+{
+    try
+    {
+        jsonPayload = nlohmann::json::parse(request.body());
+    }
+    catch (const nlohmann::json::parse_error& e)
+    {
+        BMCWEB_LOG_ERROR("RDE: JSON parse error: {}", e.what());
+        messages::malformedJSON(response);
+        return false;
+    }
+
+    return true;
+}
+
+inline bool validateSocConfigurationPatchTokens(
+    crow::Response& response, const nlohmann::json& jsonPayload,
+    const std::vector<std::string>& cacheEntries)
+{
+    const nlohmann::json::object_t* requestObject =
+        jsonPayload.get_ptr<const nlohmann::json::object_t*>();
+    if (requestObject == nullptr || requestObject->empty())
+    {
+        messages::propertyValueIncorrect(response, "RequestBody", jsonPayload);
+        return false;
+    }
+
+    std::set<std::string> pendingTokenKeys;
+    for (const std::string& entryStr : cacheEntries)
+    {
+        nlohmann::json cacheEntry = nlohmann::json::parse(entryStr, nullptr, false);
+        if (cacheEntry.is_discarded())
+        {
+            continue;
+        }
+
+        const std::string* uri = cacheEntry["URI"].get_ptr<const std::string*>();
+        const std::string* status =
+            cacheEntry["Status"].get_ptr<const std::string*>();
+        const std::string* payload =
+            cacheEntry["Payload"].get_ptr<const std::string*>();
+        if (uri == nullptr || status == nullptr || payload == nullptr ||
+            *uri != socConfigurationTokenSubUri || *status != "Pending")
+        {
+            continue;
+        }
+
+        nlohmann::json payloadJson = nlohmann::json::parse(*payload, nullptr, false);
+        const auto* payloadObj =
+            payloadJson.get_ptr<const nlohmann::json::object_t*>();
+        if (payloadObj == nullptr)
+        {
+            continue;
+        }
+        for (const auto& tokenItem : *payloadObj)
+        {
+            pendingTokenKeys.emplace(tokenItem.first);
+        }
+    }
+
+    for (const auto& [key, value] : *requestObject)
+    {
+        if (key.empty())
+        {
+            messages::propertyValueIncorrect(response, key, value);
+            return false;
+        }
+
+        if (pendingTokenKeys.find(key) == pendingTokenKeys.end())
+        {
+            messages::propertyValueIncorrect(response, key, value);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -1058,40 +1147,68 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
         BMCWEB_LOG_INFO("RDE GET operation for system [{}]", self->deviceUUID);
 
         nlohmann::json jsonPayload;
-        try
+        if (!parseSocConfigurationPatchPayload(self->request, self->asyncResp->res,
+                                               jsonPayload))
         {
-            jsonPayload = nlohmann::json::parse(self->request.body());
-        }
-        catch (const nlohmann::json::parse_error& e)
-        {
-            BMCWEB_LOG_ERROR("RDE: JSON parse error: {}", e.what());
-            messages::malformedJSON(self->asyncResp->res);
             return;
         }
 
-        std::string rdePayload = jsonPayload.dump();
-        // Begin async method call
+        auto startPatchOperation = [self](std::string&& rdePayload) {
+            crow::connections::systemBus->async_method_call(
+                [self](const boost::system::error_code ec2,
+                       const sdbusplus::message_t&, const ObjectPath& objPath) {
+                    if (ec2)
+                    {
+                        BMCWEB_LOG_ERROR("RDE: operationGet failed: {}",
+                                         ec2.message());
+                        messages::internalError(self->asyncResp->res);
+                        return;
+                    }
+
+                    BMCWEB_LOG_INFO("RDE: task created at {}",
+                                    static_cast<const std::string&>(objPath));
+
+                    task::Payload payload(self->request);
+                    rdeCreateTask(std::move(payload), objPath,
+                                  self->resourceData);
+                },
+                pldmService, rdeManagerPath, rdeManagerInterface,
+                rdeOperationMethod, self->nextOperationId(),
+                rdeOperationTypePatch, self->subUri, self->deviceUUID,
+                self->deviceEID, std::move(rdePayload), rdePayloadFormatInline,
+                rdeEncodingFormatJSON, self->schema);
+        };
+
+        if (self->subUri != socConfigurationTokenSubUri)
+        {
+            startPatchOperation(jsonPayload.dump());
+            return;
+        }
+
         crow::connections::systemBus->async_method_call(
-            [self](const boost::system::error_code ec,
-                   const sdbusplus::message_t&, const ObjectPath& objPath) {
+            [self, jsonPayload = std::move(jsonPayload),
+             startPatchOperation = std::move(startPatchOperation)](
+                const boost::system::error_code ec,
+                const std::vector<std::string>& cacheEntries) mutable {
                 if (ec)
                 {
-                    BMCWEB_LOG_ERROR("RDE: operationGet failed: {}",
+                    BMCWEB_LOG_ERROR("RDE: cache query failed: {}",
                                      ec.message());
                     messages::internalError(self->asyncResp->res);
                     return;
                 }
 
-                BMCWEB_LOG_INFO("RDE: task created at {}",
-                                static_cast<const std::string&>(objPath));
+                if (!validateSocConfigurationPatchTokens(self->asyncResp->res,
+                                                         jsonPayload,
+                                                         cacheEntries))
+                {
+                    return;
+                }
 
-                task::Payload payload(self->request);
-                rdeCreateTask(std::move(payload), objPath, self->resourceData);
+                startPatchOperation(jsonPayload.dump());
             },
-            pldmService, rdeManagerPath, rdeManagerInterface,
-            rdeOperationMethod, self->nextOperationId(), rdeOperationTypePatch,
-            self->subUri, self->deviceUUID, self->deviceEID, rdePayload,
-            rdePayloadFormatInline, rdeEncodingFormatJSON, self->schema);
+            pldmService, rdeCacheManagerPath, rdeCacheManagerInterface,
+            rdeGetCurrentCacheMethod, self->deviceUUID);
     }
 
     /**
