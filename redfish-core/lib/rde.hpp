@@ -328,13 +328,25 @@ inline bool validateSocConfigurationPatchTokenKeys(
         return false;
     }
 
+    auto payloadTokenMapIt = apcbDataTable.find("Payload");
+    if (payloadTokenMapIt == apcbDataTable.end())
+    {
+        messages::internalError(response);
+        return false;
+    }
+
+    const APCBDataTableEntryType& payloadTokenMap = payloadTokenMapIt->second;
+
     for (const auto& [key, value] : *requestObject)
     {
-        if (key.empty() || apcbDataTable.find(key) == apcbDataTable.end())
+        auto expectedTokenIt = payloadTokenMap.find(key);
+        if (key.empty() || expectedTokenIt == payloadTokenMap.end())
         {
             messages::propertyValueIncorrect(response, key, value);
             return false;
         }
+
+        // Presence in APCBDataTable["Payload"] is sufficient for validation.
     }
 
     return true;
