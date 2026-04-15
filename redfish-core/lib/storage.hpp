@@ -721,12 +721,79 @@ inline void handleSystemsStorageDriveGet(
                         driveId));
 }
 
+inline void handleSystemsStorageDrivePost(
+    App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& driveId)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        // Option currently returns no systems.  TBD
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    nlohmann::json drivePostJsonObject = nlohmann::json::parse(req.body(),
+                                                               nullptr, false);
+    InnerMap driveDataMap;
+    for (auto& [key, value] : drivePostJsonObject.items())
+    {
+        if (value.is_number_integer())
+        {
+            driveDataMap[json_util::toUpperCase(key)] = value.get<int64_t>();
+        }
+        else if (value.is_string())
+        {
+            driveDataMap[json_util::toUpperCase(key)] =
+                value.get<std::string>();
+        }
+        else
+        {
+            BMCWEB_LOG_ERROR("Dimm -Not supported type received from BIOS");
+        }
+    }
+
+    OuterMap driveMap;
+    driveMap[driveId] = driveDataMap;
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code ec) {
+        if (ec)
+        {
+            BMCWEB_LOG_DEBUG("Storage - POST D-Bus responses error: {}", ec);
+            messages::internalError(asyncResp->res);
+            return;
+        }
+        messages::success(asyncResp->res);
+        return;
+    }, "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "SetStorageData", driveMap);
+
+    asyncResp->res.jsonValue["Status"] = "OK";
+}
+
 inline void requestRoutesDrive(App& app)
 {
     BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Storage/1/Drives/<str>/")
         .privileges(redfish::privileges::getDrive)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handleSystemsStorageDriveGet, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Storage/1/Drives/<str>/")
+        .privileges(redfish::privileges::postDrive)
+        .methods(boost::beast::http::verb::post)(
+            std::bind_front(handleSystemsStorageDrivePost, std::ref(app)));
 }
 
 inline void afterChassisDriveCollectionSubtreeGet(
