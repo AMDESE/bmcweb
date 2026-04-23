@@ -473,21 +473,8 @@ inline void getDriveItemProperties(
                         return;
                     }
 
-                    std::optional<drive::MediaType> mediaType =
-                        convertDriveType(*value);
-                    if (!mediaType)
-                    {
-                        BMCWEB_LOG_WARNING("UnknownDriveType Interface: {}",
-                                           *value);
-                        continue;
-                    }
-                    if (*mediaType == drive::MediaType::Invalid)
-                    {
-                        messages::internalError(asyncResp->res);
-                        return;
-                    }
-
-                    asyncResp->res.jsonValue["MediaType"] = *mediaType;
+                    // read type value direct from Bios
+                    asyncResp->res.jsonValue["MediaType"] = *value;
                 }
                 else if (propertyName == "Capacity")
                 {
