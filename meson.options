@@ -159,6 +159,14 @@ option(
     description: '''Enable provisioning feature support in redfish. Paths are
                     under /redfish/v1/Systems/system/''',
 )
+option(
+    'redfish-trace-logger',
+    type: 'feature',
+    value: 'enabled',
+    description: '''Enable trace log service transactions based on
+                    phosphor-tracelogger through Redfish.  Paths are under
+                    /redfish/v1/Systems/system/LogServices/TraceLogs''',
+)
 
 # BMCWEB_REDFISH_MANAGER_URI_NAME
 option(
