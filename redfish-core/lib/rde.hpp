@@ -37,10 +37,6 @@ using RDEVariantType = std::variant<std::vector<std::string>, std::string,
 using RDEPropertiesMap = std::vector<std::pair<std::string, RDEVariantType>>;
 using ObjectPath = sdbusplus::message::object_path;
 using DbusVariantType = std::variant<std::string, uint16_t, int64_t, bool>;
-using APCBDataTableValueType = std::variant<int64_t, std::string>;
-using APCBDataTableEntryType =
-    std::map<std::string, APCBDataTableValueType>;
-using APCBDataTableType = std::map<std::string, APCBDataTableEntryType>;
 
 constexpr const char* procSchemaName = "Processors";
 constexpr const char* networkSchemaName = "NetworkAdapter";
@@ -51,12 +47,6 @@ constexpr const char* rdeSignalInterface =
 constexpr const char* rdeManagerPath = "/xyz/openbmc_project/RDE/Manager";
 constexpr const char* rdeManagerInterface = "xyz.openbmc_project.RDE.Manager";
 constexpr const char* rdeOperationMethod = "StartRedfishOperation";
-constexpr const char* rdeCacheManagerPath = "/xyz/openbmc_project/RDE/CacheManager";
-constexpr const char* rdeCacheManagerInterface =
-    "xyz.openbmc_project.RDE.CacheManager";
-constexpr const char* rdeApcbDataTableProperty = "APCBDataTable";
-constexpr const char* socConfigurationTokenSubUri =
-    "Oem/AMD/SocConfiguration/Token";
 constexpr const char* rdeOperationTypeRead =
     "xyz.openbmc_project.RDE.Common.OperationType.READ";
 constexpr const char* rdeOperationTypePatch =
@@ -314,41 +304,6 @@ inline void rdeCreateTask(task::Payload&& payload,
 
     task->startTimer(std::chrono::minutes(rdeTaskTimeoutMinutes));
     task->payload.emplace(std::move(payload));
-}
-
-inline bool validateSocConfigurationPatchTokenKeys(
-    crow::Response& response, const nlohmann::json& jsonPayload,
-    const APCBDataTableType& apcbDataTable)
-{
-    const nlohmann::json::object_t* requestObject =
-        jsonPayload.get_ptr<const nlohmann::json::object_t*>();
-    if (requestObject == nullptr || requestObject->empty())
-    {
-        messages::propertyValueIncorrect(response, "RequestBody", jsonPayload);
-        return false;
-    }
-
-    auto payloadTokenMapIt = apcbDataTable.find("Payload");
-    if (payloadTokenMapIt == apcbDataTable.end())
-    {
-        messages::internalError(response);
-        return false;
-    }
-
-    const APCBDataTableEntryType& payloadTokenMap = payloadTokenMapIt->second;
-
-    for (const auto& [key, value] : *requestObject)
-    {
-        auto expectedTokenIt = payloadTokenMap.find(key);
-        if (key.empty() || expectedTokenIt == payloadTokenMap.end())
-        {
-            BMCWEB_LOG_ERROR("RDE: Either Empty or Invalid APCB Token");
-            messages::propertyValueIncorrect(response, key, value);
-            return false;
-        }
-    }
-
-    return true;
 }
 
 /**
@@ -1114,61 +1069,29 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
             return;
         }
 
-        auto startPatchOperation = [self](std::string&& rdePayload) {
-            crow::connections::systemBus->async_method_call(
-                [self](const boost::system::error_code ec,
-                       const sdbusplus::message_t&, const ObjectPath& objPath) {
-                    if (ec)
-                    {
-                        BMCWEB_LOG_ERROR("RDE: operationPatch failed: {}",
-                                         ec.message());
-                        messages::internalError(self->asyncResp->res);
-                        return;
-                    }
-
-                    BMCWEB_LOG_INFO("RDE: task created at {}",
-                                    static_cast<const std::string&>(objPath));
-
-                    task::Payload payload(self->request);
-                    rdeCreateTask(std::move(payload), objPath,
-                                  self->resourceData);
-                },
-                pldmService, rdeManagerPath, rdeManagerInterface,
-                rdeOperationMethod, self->nextOperationId(),
-                rdeOperationTypePatch, self->subUri, self->deviceUUID,
-                self->deviceEID, std::move(rdePayload), rdePayloadFormatInline,
-                rdeEncodingFormatJSON, self->schema);
-        };
-
-        if (self->subUri != socConfigurationTokenSubUri)
-        {
-            startPatchOperation(jsonPayload.dump());
-            return;
-        }
-
-        dbus::utility::getProperty<APCBDataTableType>(
-            pldmService, rdeCacheManagerPath, rdeCacheManagerInterface,
-            rdeApcbDataTableProperty,
-            [self, jsonPayload = std::move(jsonPayload),
-             startPatchOperation = std::move(startPatchOperation)](
-                const boost::system::error_code& ec,
-                const APCBDataTableType& apcbDataTable) mutable {
+        std::string rdePayload = jsonPayload.dump();
+        // Begin async method call
+        crow::connections::systemBus->async_method_call(
+            [self](const boost::system::error_code ec,
+                   const sdbusplus::message_t&, const ObjectPath& objPath) {
                 if (ec)
                 {
-                    BMCWEB_LOG_ERROR("RDE: APCBDataTable query failed: {}",
+                    BMCWEB_LOG_ERROR("RDE: operationGet failed: {}",
                                      ec.message());
                     messages::internalError(self->asyncResp->res);
                     return;
                 }
 
-                if (!validateSocConfigurationPatchTokenKeys(
-                        self->asyncResp->res, jsonPayload, apcbDataTable))
-                {
-                    return;
-                }
+                BMCWEB_LOG_INFO("RDE: task created at {}",
+                                static_cast<const std::string&>(objPath));
 
-                startPatchOperation(jsonPayload.dump());
-            });
+                task::Payload payload(self->request);
+                rdeCreateTask(std::move(payload), objPath, self->resourceData);
+            },
+            pldmService, rdeManagerPath, rdeManagerInterface,
+            rdeOperationMethod, self->nextOperationId(), rdeOperationTypePatch,
+            self->subUri, self->deviceUUID, self->deviceEID, rdePayload,
+            rdePayloadFormatInline, rdeEncodingFormatJSON, self->schema);
     }
 
     /**
