@@ -23,12 +23,12 @@
 #include <iterator>
 #include <map>
 #include <memory>
-#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <type_traits>
 #include <variant>
 #include <vector>
 namespace redfish
@@ -37,6 +37,12 @@ namespace redfish
  * BiosService class supports handle get method for bios.
  */
 using BiosAttrMap = std::map<std::string, std::variant<int64_t, std::string>>;
+using BiosRegistryRow =
+    std::map<std::string, std::variant<int64_t, std::string>>;
+using BiosRegistryAttrMap =
+    std::map<std::string, BiosRegistryRow>;
+
+inline constexpr std::string_view biosRegistryMetaInnerKey = "__v";
 // Convert json object to key value pair
 inline BiosAttrMap JsonToBiosAttributes(const nlohmann::json& j)
 {
@@ -58,6 +64,121 @@ inline BiosAttrMap JsonToBiosAttributes(const nlohmann::json& j)
     } // end of for loop
 
     return iMap;
+}
+
+inline bool isBiosRegistryAttributeKey(std::string_view k)
+{
+    return k.size() >= 6 && k.compare(0, 6, "/Bios/") == 0;
+}
+
+inline void putJsonIntoRegistryRow(BiosRegistryRow& row, const std::string& fk,
+                                   const nlohmann::json& fv)
+{
+    if (fv.is_number_integer())
+    {
+        row[fk] = fv.get<int64_t>();
+    }
+    else if (fv.is_number_unsigned())
+    {
+        row[fk] = static_cast<int64_t>(fv.get<uint64_t>());
+    }
+    else if (fv.is_string())
+    {
+        row[fk] = fv.get<std::string>();
+    }
+    else if (fv.is_boolean())
+    {
+        row[fk] = fv.get<bool>() ? int64_t{1} : int64_t{0};
+    }
+    else if (!fv.is_null())
+    {
+        row[fk] = fv.dump();
+    }
+}
+
+inline BiosRegistryAttrMap JsonToBiosRegistryPutAttributes(const nlohmann::json& j)
+{
+    BiosRegistryAttrMap out;
+    if (j.contains("RegistryEntries"))
+    {
+        if (!j["RegistryEntries"].is_object())
+        {
+            return {};
+        }
+        const nlohmann::json& re = j["RegistryEntries"];
+
+        for (const auto& [key, value] : j.items())
+        {
+            if (key == "RegistryEntries")
+            {
+                continue;
+            }
+            BiosRegistryRow meta;
+            if (value.is_string())
+            {
+                meta[std::string{biosRegistryMetaInnerKey}] =
+                    value.get<std::string>();
+            }
+            else if (value.is_number_integer())
+            {
+                meta[std::string{biosRegistryMetaInnerKey}] =
+                    value.get<int64_t>();
+            }
+            else if (value.is_number_unsigned())
+            {
+                meta[std::string{biosRegistryMetaInnerKey}] =
+                    static_cast<int64_t>(value.get<uint64_t>());
+            }
+            else if (value.is_boolean())
+            {
+                meta[std::string{biosRegistryMetaInnerKey}] =
+                    value.get<bool>() ? int64_t{1} : int64_t{0};
+            }
+            else if (!value.is_null())
+            {
+                meta[std::string{biosRegistryMetaInnerKey}] = value.dump();
+            }
+            else
+            {
+                continue;
+            }
+            out[key] = std::move(meta);
+        }
+
+        if (!re.contains("Attributes") || !re["Attributes"].is_array())
+        {
+            const bool hasAttributes = re.contains("Attributes");
+            BMCWEB_LOG_ERROR(
+                "JsonToBiosRegistryPutAttributes: RegistryEntries.Attributes "
+                "missing or not a JSON array (has_Attributes={}, is_array={}); "
+                "returning metadata only",
+                hasAttributes,
+                hasAttributes && re["Attributes"].is_array());
+            return out;
+        }
+        for (const auto& el : re["Attributes"])
+        {
+            if (!el.is_object() || !el.contains("AttributeName"))
+            {
+                continue;
+            }
+            const std::string name = el["AttributeName"].get<std::string>();
+            BiosRegistryRow row;
+            for (const auto& [fk, fv] : el.items())
+            {
+                putJsonIntoRegistryRow(row, fk, fv);
+            }
+            out[name] = std::move(row);
+        }
+        return out;
+    }
+
+    if (j.contains("Attributes") && j["Attributes"].is_object())
+    {
+        return {};
+    }
+
+    return {};
 }
 
 /**
@@ -231,6 +352,27 @@ inline void setBiosAttributes(
         },
         "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
         "xyz.openbmc_project.PCIe.PcieData", "SetBiosAttribute", table);
+}
+
+inline void setBiosRegistryAttributes(
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const BiosRegistryAttrMap& table)
+{
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code ec) {
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR(
+                    "SetBiosRegistryAttribute D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+            asyncResp->res.jsonValue["status"] = "ok";
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "SetBiosRegistryAttribute",
+        table);
 }
 
 /**
@@ -563,7 +705,7 @@ inline void handleBiosSettingsGet(
             if (ec)
             {
                 BMCWEB_LOG_ERROR(
-                    "setPendingAttributes - patch Get D-Bus responses error: {}",
+                    "GetPendingAttributes - patch Get D-Bus responses error: {}",
                     ec);
                 messages::internalError(asyncResp->res);
                 return;
@@ -607,23 +749,151 @@ inline void handleBiosAttributeRegistryGet(
         return;
     }
 
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
     if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
     {
         messages::resourceNotFound(asyncResp->res, "ComputerSystem", systemName);
         return;
     }
 
-    nlohmann::ordered_json orderedRes;
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code ec,
+                    BiosRegistryAttrMap& registryTable) {
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR(
+                    "GET - GetBiosRegistryAttribute D-Bus responses error: {}",
+                    ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
 
-    orderedRes["@odata.type"] = "#AttributeRegistry.v1_3_2.AttributeRegistry";
-    orderedRes["Id"] = "BiosAttributeRegistry";
-    orderedRes["Name"] = "BIOS Attribute Registry";
-    orderedRes["Language"] = "en";
-    orderedRes["RegistryVersion"] = "1.4.0";
-    orderedRes["RegistryPrefix"] = "BiosAttributeRegistry";
-    orderedRes["AttributeRegistry"] = nlohmann::json::object();
+            nlohmann::ordered_json orderedRes;
+            orderedRes["@odata.type"] =
+                "#AttributeRegistry.v1_3_6.AttributeRegistry";
+            orderedRes["Id"] = "BiosAttributeRegistry";
+            orderedRes["Name"] = "BIOS Attribute Registry";
+            orderedRes["Language"] = "en";
+            orderedRes["OwningEntity"] = "BIOS";
+            orderedRes["RegistryVersion"] = "1.4.0";
+            orderedRes["RegistryPrefix"] = "BiosAttributeRegistry";
+            orderedRes["AttributeRegistry"] = nlohmann::json::object();
 
-    asyncResp->res.write(orderedRes.dump(2));
+            for (const auto& [key, row] : registryTable)
+            {
+                if (isBiosRegistryAttributeKey(key))
+                {
+                    continue;
+                }
+                if (!key.empty() && key[0] == '_' && key.size() > 1 &&
+                    key[1] == '_')
+                {
+                    continue;
+                }
+                auto mit = row.find(std::string{biosRegistryMetaInnerKey});
+                if (mit != row.end())
+                {
+                    std::visit(
+                        [&orderedRes, &key](const auto& val) {
+                            orderedRes[key] = val;
+                        },
+                        mit->second);
+                }
+                else if (row.size() == 1)
+                {
+                    std::visit(
+                        [&orderedRes, &key](const auto& val) {
+                            orderedRes[key] = val;
+                        },
+                        row.begin()->second);
+                }
+            }
+
+            nlohmann::json::array_t attributes;
+            attributes.reserve(registryTable.size());
+            for (const auto& [key, row] : registryTable)
+            {
+                if (!isBiosRegistryAttributeKey(key))
+                {
+                    continue;
+                }
+                nlohmann::json attr = nlohmann::json::object();
+                for (const auto& [fk, fv] : row)
+                {
+                    if (const auto* pi = std::get_if<int64_t>(&fv))
+                    {
+                        if (fk == "ReadOnly" || fk == "ResetRequired")
+                        {
+                            attr[fk] = (*pi != 0);
+                        }
+                        else
+                        {
+                            attr[fk] = *pi;
+                        }
+                    }
+                    else if (const auto* ps = std::get_if<std::string>(&fv))
+                    {
+                        attr[fk] = *ps;
+                    }
+                }
+                attributes.push_back(std::move(attr));
+            }
+            orderedRes["RegistryEntries"]["Attributes"] = std::move(attributes);
+
+            asyncResp->res.jsonValue = orderedRes;
+            messages::success(asyncResp->res);
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "GetBiosRegistryAttribute");
+}
+
+inline void handleBiosAttributeRegistryPut(
+    crow::App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem", systemName);
+        return;
+    }
+
+    nlohmann::json body =
+        nlohmann::json::parse(req.body(), nullptr, false);
+    if (body.is_discarded())
+    {
+        messages::malformedJSON(asyncResp->res);
+        return;
+    }
+
+    BiosRegistryAttrMap table = JsonToBiosRegistryPutAttributes(body);
+    if (table.empty())
+    {
+        asyncResp->res.jsonValue["message"] = "Not valid input";
+        asyncResp->res.jsonValue["status"] = "error";
+	 BMCWEB_LOG_ERROR("JSON TO BIOS REGISTRY FAILED");
+        return;
+    }
+
+    setBiosRegistryAttributes(asyncResp, table);
 }
 
 inline void requestRoutesBiosAttributeRegistry(App& app)
@@ -632,6 +902,11 @@ inline void requestRoutesBiosAttributeRegistry(App& app)
         .privileges(redfish::privileges::getBios)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handleBiosAttributeRegistryGet, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Bios/BiosAttributeRegistry")
+        .privileges(redfish::privileges::putAttributeRegistry)
+        .methods(boost::beast::http::verb::put)(
+            std::bind_front(handleBiosAttributeRegistryPut, std::ref(app)));
 }
 
 inline void handleBiosAttributeRegistryMetadataGet(
