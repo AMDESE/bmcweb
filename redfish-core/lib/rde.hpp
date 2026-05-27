@@ -4,6 +4,7 @@
 
 #include "app.hpp"
 #include "async_resp.hpp"
+#include "error_message_utils.hpp"
 #include "task.hpp"
 
 #include <boost/beast/http/status.hpp>
@@ -14,6 +15,7 @@
 #include <format>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +39,10 @@ using RDEVariantType = std::variant<std::vector<std::string>, std::string,
 using RDEPropertiesMap = std::vector<std::pair<std::string, RDEVariantType>>;
 using ObjectPath = sdbusplus::message::object_path;
 using DbusVariantType = std::variant<std::string, uint16_t, int64_t, bool>;
+using APCBDataTableValueType = std::variant<int64_t, std::string>;
+using APCBDataTableEntryType =
+    std::map<std::string, APCBDataTableValueType>;
+using APCBDataTableType = std::map<std::string, APCBDataTableEntryType>;
 
 constexpr const char* procSchemaName = "Processors";
 constexpr const char* networkSchemaName = "NetworkAdapter";
@@ -47,6 +53,12 @@ constexpr const char* rdeSignalInterface =
 constexpr const char* rdeManagerPath = "/xyz/openbmc_project/RDE/Manager";
 constexpr const char* rdeManagerInterface = "xyz.openbmc_project.RDE.Manager";
 constexpr const char* rdeOperationMethod = "StartRedfishOperation";
+constexpr const char* rdeCacheManagerPath = "/xyz/openbmc_project/RDE/CacheManager";
+constexpr const char* rdeCacheManagerInterface =
+    "xyz.openbmc_project.RDE.CacheManager";
+constexpr const char* rdeApcbDataTableProperty = "APCBDataTable";
+constexpr const char* socConfigurationTokenSubUri =
+    "Oem/AMD/SocConfiguration/Token";
 constexpr const char* rdeOperationTypeRead =
     "xyz.openbmc_project.RDE.Common.OperationType.READ";
 constexpr const char* rdeOperationTypePatch =
@@ -216,7 +228,8 @@ inline bool rdeProcessTaskUpdateSignal(
         {
             data = std::get_if<std::string>(&propertyPair.second);
         }
-        else if (propertyPair.first == "return_code")
+        else if (propertyPair.first == "return_code" ||
+                 propertyPair.first == "CompletionCode")
         {
             rc = std::get_if<uint16_t>(&propertyPair.second);
         }
@@ -224,7 +237,8 @@ inline bool rdeProcessTaskUpdateSignal(
 
     if (data == nullptr || rc == nullptr)
     {
-        BMCWEB_LOG_ERROR("RDE: Missing 'payload' or 'return_code' in signal");
+        BMCWEB_LOG_ERROR(
+            "RDE: Missing 'payload' or completion code in TaskUpdated signal");
         taskData->messages.emplace_back(messages::internalError());
         taskData->state = "Exception";
         return task::completed;
@@ -239,6 +253,20 @@ inline bool rdeProcessTaskUpdateSignal(
         return task::completed;
     }
     const auto& uriMapJson = jsonBody["uriMap"];
+
+    if (*rc == completionCodeOperationFailed)
+    {
+        BMCWEB_LOG_ERROR("RDE: PATCH apply failed, return_code={}", *rc);
+        taskData->messages.emplace_back(messages::internalError());
+        taskData->state = "Exception";
+        return task::completed;
+    }
+
+    if (*rc != completionCodeOperationCompleted)
+    {
+        BMCWEB_LOG_INFO("RDE: PATCH apply interim update, return_code={}", *rc);
+        return !task::completed;
+    }
 
     nlohmann::json taskEntry;
     try
@@ -259,6 +287,9 @@ inline bool rdeProcessTaskUpdateSignal(
     taskData->messages.emplace_back(taskEntry);
     taskData->messages.emplace_back(messages::taskCompletedOK(index));
     taskData->state = "Completed";
+    BMCWEB_LOG_INFO(
+        "RDE: PATCH apply completed successfully, Task Id={}, return_code={}",
+        index, *rc);
 
     return task::completed;
 }
@@ -273,11 +304,13 @@ inline bool rdeProcessTaskUpdateSignal(
  * @param payload      The task payload containing response and context.
  * @param objPath      The D-Bus object path for the RDE operation.
  * @param resourceData Metadata and schema information for the RDE resource.
+ * @param res          HTTP response to populate with 202 Accepted + Task body.
  */
 
 inline void rdeCreateTask(task::Payload&& payload,
                           const sdbusplus::message::object_path& objPath,
-                          const RDESchemaResource& resourceData)
+                          const RDESchemaResource& resourceData,
+                          crow::Response& res)
 {
     std::string matchString = rdeOpTaskMatch(objPath.str);
 
@@ -299,11 +332,119 @@ inline void rdeCreateTask(task::Payload&& payload,
     // Embed uriMap into payload metadata
     payload.jsonBody["uriMap"] = std::move(uriMapJson);
 
-    auto task = task::TaskData::createTask(
+    auto& task = task::TaskData::createTask(
         std::bind_front(redfish::rdeProcessTaskUpdateSignal), matchString);
 
     task->startTimer(std::chrono::minutes(rdeTaskTimeoutMinutes));
     task->payload.emplace(std::move(payload));
+    task->populateResp(res);
+    BMCWEB_LOG_INFO(
+        "RDE: PATCH apply accepted (HTTP 202), Task Id={}, TaskState={}, opPath={}",
+        task->index, task->state, objPath.str);
+}
+
+inline std::optional<std::string> suggestApcbTokenName(
+    const std::string& invalidKey,
+    const APCBDataTableEntryType& payloadTokenMap)
+{
+    std::vector<std::string> candidates;
+    for (const auto& [tokenName, _] : payloadTokenMap)
+    {
+        if (tokenName == invalidKey)
+        {
+            continue;
+        }
+        if (tokenName.starts_with(invalidKey) ||
+            invalidKey.starts_with(tokenName))
+        {
+            candidates.push_back(tokenName);
+        }
+    }
+
+    if (candidates.size() == 1)
+    {
+        return candidates.front();
+    }
+    return std::nullopt;
+}
+
+inline void reportInvalidApcbToken(crow::Response& response,
+                                   const std::string& invalidKey,
+                                   const APCBDataTableEntryType& payloadTokenMap)
+{
+    messages::propertyUnknown(response, invalidKey);
+
+    std::string resolution;
+    if (const auto suggestion =
+            suggestApcbTokenName(invalidKey, payloadTokenMap))
+    {
+        resolution = std::format(
+            "Unknown APCB configuration token '{}'. Did you mean '{}'? "
+            "Use GET .../Oem/AMD/SocConfiguration/Token to list all valid token names.",
+            invalidKey, *suggestion);
+        BMCWEB_LOG_ERROR(
+            "RDE: Invalid APCB token '{}', suggested correction '{}'",
+            invalidKey, *suggestion);
+    }
+    else
+    {
+        resolution = std::format(
+            "Unknown APCB configuration token '{}'. "
+            "Use GET .../Oem/AMD/SocConfiguration/Token to list valid token names.",
+            invalidKey);
+        BMCWEB_LOG_ERROR("RDE: Invalid APCB token '{}'", invalidKey);
+    }
+
+    auto& error = response.jsonValue["error"];
+    auto& extendedInfo = error[messages::messageAnnotation];
+    if (extendedInfo.is_array() && !extendedInfo.empty())
+    {
+        extendedInfo.back()["Resolution"] = resolution;
+    }
+}
+
+inline bool validateSocConfigurationPatchTokenKeys(
+    crow::Response& response, const nlohmann::json& jsonPayload,
+    const APCBDataTableType& apcbDataTable, const std::string& deviceUUID)
+{
+    const nlohmann::json::object_t* requestObject =
+        jsonPayload.get_ptr<const nlohmann::json::object_t*>();
+    if (requestObject == nullptr || requestObject->empty())
+    {
+        messages::propertyValueIncorrect(response, "RequestBody", jsonPayload);
+        return false;
+    }
+
+    auto payloadTokenMapIt = apcbDataTable.find(deviceUUID);
+    if (payloadTokenMapIt == apcbDataTable.end())
+    {
+        BMCWEB_LOG_ERROR(
+            "RDE: APCBDataTable has no entry for device UUID {}",
+            deviceUUID);
+        messages::internalError(response);
+        return false;
+    }
+
+    const APCBDataTableEntryType& payloadTokenMap = payloadTokenMapIt->second;
+
+    for (const auto& [key, value] : *requestObject)
+    {
+        (void)value;
+        if (key.empty())
+        {
+            BMCWEB_LOG_ERROR("RDE: Empty APCB token name in PATCH body");
+            messages::propertyUnknown(response, key);
+            return false;
+        }
+
+        if (payloadTokenMap.find(key) == payloadTokenMap.end())
+        {
+            reportInvalidApcbToken(response, key, payloadTokenMap);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -1055,7 +1196,8 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
      */
     inline void operationPatch(const std::shared_ptr<RDEServiceHandler>& self)
     {
-        BMCWEB_LOG_INFO("RDE GET operation for system [{}]", self->deviceUUID);
+        BMCWEB_LOG_INFO("RDE PATCH operation for system [{}], subUri={}",
+                        self->deviceUUID, self->subUri);
 
         nlohmann::json jsonPayload;
         try
@@ -1066,32 +1208,76 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
         {
             BMCWEB_LOG_ERROR("RDE: JSON parse error: {}", e.what());
             messages::malformedJSON(self->asyncResp->res);
+            self->responseSent = true;
             return;
         }
 
-        std::string rdePayload = jsonPayload.dump();
-        // Begin async method call
-        crow::connections::systemBus->async_method_call(
-            [self](const boost::system::error_code ec,
-                   const sdbusplus::message_t&, const ObjectPath& objPath) {
+        auto startPatchOperation = [self](std::string&& rdePayload) {
+            crow::connections::systemBus->async_method_call(
+                [self](const boost::system::error_code ec,
+                       const sdbusplus::message_t&, const ObjectPath& objPath) {
+                    if (ec)
+                    {
+                        BMCWEB_LOG_ERROR("RDE: operationPatch failed: {}",
+                                         ec.message());
+                        messages::internalError(self->asyncResp->res);
+                        self->responseSent = true;
+                        return;
+                    }
+
+                    BMCWEB_LOG_INFO("RDE: PATCH operation task created at {}",
+                                    static_cast<const std::string&>(objPath));
+
+                    task::Payload payload(self->request);
+                    rdeCreateTask(std::move(payload), objPath,
+                                  self->resourceData, self->asyncResp->res);
+                    self->responseSent = true;
+                },
+                pldmService, rdeManagerPath, rdeManagerInterface,
+                rdeOperationMethod, self->nextOperationId(),
+                rdeOperationTypePatch, self->subUri, self->deviceUUID,
+                self->deviceEID, std::move(rdePayload), rdePayloadFormatInline,
+                rdeEncodingFormatJSON, self->schema);
+        };
+
+        if (self->subUri != socConfigurationTokenSubUri)
+        {
+            startPatchOperation(jsonPayload.dump());
+            return;
+        }
+
+        dbus::utility::getProperty<APCBDataTableType>(
+            pldmService, rdeCacheManagerPath, rdeCacheManagerInterface,
+            rdeApcbDataTableProperty,
+            [self, jsonPayload = std::move(jsonPayload),
+             startPatchOperation = std::move(startPatchOperation)](
+                const boost::system::error_code& ec,
+                const APCBDataTableType& apcbDataTable) mutable {
                 if (ec)
                 {
-                    BMCWEB_LOG_ERROR("RDE: operationGet failed: {}",
+                    BMCWEB_LOG_ERROR("RDE: APCBDataTable query failed: {}",
                                      ec.message());
                     messages::internalError(self->asyncResp->res);
+                    self->responseSent = true;
                     return;
                 }
 
-                BMCWEB_LOG_INFO("RDE: task created at {}",
-                                static_cast<const std::string&>(objPath));
+                if (!validateSocConfigurationPatchTokenKeys(
+                        self->asyncResp->res, jsonPayload, apcbDataTable,
+                        self->deviceUUID))
+                {
+                    BMCWEB_LOG_ERROR(
+                        "RDE: PATCH token validation failed for UUID {}",
+                        self->deviceUUID);
+                    self->responseSent = true;
+                    return;
+                }
 
-                task::Payload payload(self->request);
-                rdeCreateTask(std::move(payload), objPath, self->resourceData);
-            },
-            pldmService, rdeManagerPath, rdeManagerInterface,
-            rdeOperationMethod, self->nextOperationId(), rdeOperationTypePatch,
-            self->subUri, self->deviceUUID, self->deviceEID, rdePayload,
-            rdePayloadFormatInline, rdeEncodingFormatJSON, self->schema);
+                BMCWEB_LOG_INFO(
+                    "RDE: PATCH token validation passed for UUID {}",
+                    self->deviceUUID);
+                startPatchOperation(jsonPayload.dump());
+            });
     }
 
     /**
