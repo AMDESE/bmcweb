@@ -560,6 +560,22 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
      */
     ~RDEServiceHandler()
     {
+        if (responseSent)
+        {
+            return;
+        }
+        if (asyncResp->res.jsonValue.contains("error"))
+        {
+            responseSent = true;
+            return;
+        }
+        if (!isRoot && (subUri == socConfigurationTokenSubUri) &&
+            deviceUUID.empty())
+        {
+            messages::serviceTemporarilyUnavailable(asyncResp->res, "30");
+            responseSent = true;
+            return;
+        }
         prepareAndSendResourceResponse();
         BMCWEB_LOG_INFO("RDEServiceHandler destroyed");
     }
@@ -613,6 +629,7 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
                         "RDE: bootstrapProcess: getSubTreePaths DBUS error: {}",
                         ec.message());
                     messages::internalError(self->asyncResp->res);
+                    self->responseSent = true;
                     return;
                 }
 
