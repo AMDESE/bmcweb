@@ -1637,14 +1637,11 @@ inline void handleSystemsLogServiceEventLogLogEntryCollection(
             nlohmann::json::object_t bmcLogEntry;
             LogParseError status =
                 fillEventLogEntryJson(idStr, logEntry, bmcLogEntry);
-            if (status == LogParseError::messageIdNotInRegistry)
-            {
-                continue;
-            }
+            // In the event that a line can't be parse, skip it as not to
+            // prevent later events from being shown
             if (status != LogParseError::success)
             {
-                messages::internalError(asyncResp->res);
-                return;
+                continue;
             }
 
             entryCount++;
@@ -1979,13 +1976,11 @@ inline void handleSystemsLogServiceEventLogEntriesGet(
                 nlohmann::json::object_t bmcLogEntry;
                 LogParseError status =
                     fillEventLogEntryJson(idStr, logEntry, bmcLogEntry);
-                if (status != LogParseError::success)
+                if (status == LogParseError::success)
                 {
-                    messages::internalError(asyncResp->res);
+                    asyncResp->res.jsonValue.update(bmcLogEntry);
                     return;
                 }
-                asyncResp->res.jsonValue.update(bmcLogEntry);
-                return;
             }
         }
     }
