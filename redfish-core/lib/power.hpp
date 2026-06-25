@@ -40,8 +40,107 @@
 namespace redfish
 {
 
+// Power capping settings live on xyz.openbmc_project.Settings, one object per
+// host instance. The host->socket binding is owned by the power-capping
+// daemon; bmcweb only needs to select the correct settings object:
+//   2P   (HostMode CurrentMode == 0) -> host0 controls all sockets
+//   2x1P (HostMode CurrentMode == 1) -> host1 = P0, host2 = P1 (independent)
+constexpr int hparMode2P = 0;
+constexpr int hparMode2x1P = 1;
+
+inline std::string powerCapObjectPath(int hostInstance)
+{
+    return "/xyz/openbmc_project/control/host" + std::to_string(hostInstance) +
+           "/power_cap";
+}
+
+// Ordered list of host instances exposed as PowerControl members for a mode.
+// Index in this list == PowerControl MemberId.
+inline std::vector<int> powerCapHostsForMode(int mode)
+{
+    if (mode == hparMode2x1P)
+    {
+        return {1, 2}; // PowerControl/0 -> host1 (P0), PowerControl/1 -> host2
+    }
+    return {0}; // 2P / default: single PowerControl -> host0
+}
+
+// Read HostMode CurrentMode and invoke cb(mode). Defaults to 2P (0) on any
+// error or when HostMode is unavailable, so single-socket / legacy 2P
+// platforms keep the existing single-host behavior. CurrentMode encoding is
+// accepted as integer-like or numeric string to match the platform tooling.
+inline void getHparModeThen(std::function<void(int)>&& cb)
+{
+    dbus::utility::getAllProperties(
+        "xyz.openbmc_project.Settings",
+        "/xyz/openbmc_project/control/HostMode",
+        "xyz.openbmc_project.Control.HostMode",
+        [cb = std::move(cb)](
+            const boost::system::error_code& ec,
+            const dbus::utility::DBusPropertiesMap& properties) mutable {
+            int mode = hparMode2P;
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("HostMode unavailable, assuming 2P: {}",
+                                 ec.message());
+                cb(mode);
+                return;
+            }
+            for (const std::pair<std::string, dbus::utility::DbusVariantType>&
+                     property : properties)
+            {
+                if (property.first != "CurrentMode")
+                {
+                    continue;
+                }
+                if (const std::string* s =
+                        std::get_if<std::string>(&property.second))
+                {
+                    try
+                    {
+                        mode = std::stoi(*s);
+                    }
+                    catch (...)
+                    {
+                        mode = hparMode2P;
+                    }
+                }
+                else if (const uint8_t* u8 =
+                             std::get_if<uint8_t>(&property.second))
+                {
+                    mode = *u8;
+                }
+                else if (const uint16_t* u16 =
+                             std::get_if<uint16_t>(&property.second))
+                {
+                    mode = *u16;
+                }
+                else if (const uint32_t* u32 =
+                             std::get_if<uint32_t>(&property.second))
+                {
+                    mode = static_cast<int>(*u32);
+                }
+                else if (const uint64_t* u64 =
+                             std::get_if<uint64_t>(&property.second))
+                {
+                    mode = static_cast<int>(*u64);
+                }
+                else if (const int64_t* i64 =
+                             std::get_if<int64_t>(&property.second))
+                {
+                    mode = static_cast<int>(*i64);
+                }
+                else if (const bool* b = std::get_if<bool>(&property.second))
+                {
+                    mode = *b ? hparMode2x1P : hparMode2P;
+                }
+            }
+            cb(mode);
+        });
+}
+
 inline void afterGetPowerCapEnable(
-    const std::shared_ptr<SensorsAsyncResp>& sensorsAsyncResp,
+    const std::shared_ptr<SensorsAsyncResp>& sensorsAsyncResp, int hostInstance,
     uint32_t valueToSet, const boost::system::error_code& ec,
     bool powerCapEnable)
 {
@@ -60,37 +159,20 @@ inline void afterGetPowerCapEnable(
         return;
     }
 
-    setDbusProperty(sensorsAsyncResp->asyncResp, "PowerControl",
-                    "xyz.openbmc_project.Settings",
-                    sdbusplus::message::object_path(
-                        "/xyz/openbmc_project/control/host0/power_cap"),
-                    "xyz.openbmc_project.Control.Power.Cap", "PowerCap",
-                    valueToSet);
+    setDbusProperty(
+        sensorsAsyncResp->asyncResp, "PowerControl", "xyz.openbmc_project.Settings",
+        sdbusplus::message::object_path(powerCapObjectPath(hostInstance)),
+        "xyz.openbmc_project.Control.Power.Cap", "PowerCap", valueToSet);
 }
 
-inline void afterGetChassisPath(
-    const std::shared_ptr<SensorsAsyncResp>& sensorsAsyncResp,
-    std::vector<nlohmann::json::object_t>& powerControlCollections,
-    const std::optional<std::string>& chassisPath)
+// Apply a single PowerControl member's PowerLimit to the given host instance's
+// power_cap settings object. Mirrors the legacy single-host semantics:
+//   LimitInWatts == 0 / null -> disable cap (PowerCapEnable = false)
+//   LimitInWatts  > 0        -> enable cap and set PowerCap
+inline void applyPowerCapMember(
+    const std::shared_ptr<SensorsAsyncResp>& sensorsAsyncResp, int hostInstance,
+    nlohmann::json::object_t item)
 {
-    if (!chassisPath)
-    {
-        BMCWEB_LOG_WARNING("Don't find valid chassis path ");
-        messages::resourceNotFound(sensorsAsyncResp->asyncResp->res, "Chassis",
-                                   sensorsAsyncResp->chassisId);
-        return;
-    }
-
-    if (powerControlCollections.size() != 1)
-    {
-        BMCWEB_LOG_WARNING("Don't support multiple hosts at present ");
-        messages::resourceNotFound(sensorsAsyncResp->asyncResp->res, "Power",
-                                   "PowerControl");
-        return;
-    }
-
-    auto& item = powerControlCollections[0];
-
     std::optional<uint32_t> value;
     if (!item.contains("PowerLimit") ||
         !item["PowerLimit"].contains("LimitInWatts") ||
@@ -103,6 +185,9 @@ inline void afterGetChassisPath(
     {
         return;
     }
+
+    sdbusplus::message::object_path objPath(powerCapObjectPath(hostInstance));
+
     /* d-bus exposes two properties, PowerCapEnable and PowerCap.
        But redfish(UI) uses only one PowerCap value.
        So, update feature enable/disable flag based on PowerCapValue
@@ -112,40 +197,123 @@ inline void afterGetChassisPath(
     if (value == 0)
     {
         setDbusProperty(sensorsAsyncResp->asyncResp, "PowerControl",
-                        "xyz.openbmc_project.Settings",
-                        sdbusplus::message::object_path(
-                            "/xyz/openbmc_project/control/host0/power_cap"),
-                        "xyz.openbmc_project.Control.Power.Cap",
+                        "xyz.openbmc_project.Settings", objPath, "xyz.openbmc_project.Control.Power.Cap",
                         "PowerCapEnable", false);
         sensorsAsyncResp->asyncResp->res.result(
             boost::beast::http::status::no_content);
         return;
     }
-    else
-    {
-        setDbusProperty(sensorsAsyncResp->asyncResp, "PowerControl",
-                        "xyz.openbmc_project.Settings",
-                        sdbusplus::message::object_path(
-                            "/xyz/openbmc_project/control/host0/power_cap"),
-                        "xyz.openbmc_project.Control.Power.Cap",
-                        "PowerCapEnable", true);
-    }
+
+    setDbusProperty(sensorsAsyncResp->asyncResp, "PowerControl",
+                    "xyz.openbmc_project.Settings", objPath, "xyz.openbmc_project.Control.Power.Cap",
+                    "PowerCapEnable", true);
 
     dbus::utility::getProperty<bool>(
-        "xyz.openbmc_project.Settings",
-        "/xyz/openbmc_project/control/host0/power_cap",
+        "xyz.openbmc_project.Settings", powerCapObjectPath(hostInstance),
         "xyz.openbmc_project.Control.Power.Cap", "PowerCapEnable",
-        std::bind_front(afterGetPowerCapEnable, sensorsAsyncResp, *value));
+        std::bind_front(afterGetPowerCapEnable, sensorsAsyncResp, hostInstance,
+                        *value));
+}
+
+inline void afterGetChassisPath(
+    const std::shared_ptr<SensorsAsyncResp>& sensorsAsyncResp,
+    std::vector<nlohmann::json::object_t> powerControlCollections,
+    const std::optional<std::string>& chassisPath)
+{
+    if (!chassisPath)
+    {
+        BMCWEB_LOG_WARNING("Don't find valid chassis path ");
+        messages::resourceNotFound(sensorsAsyncResp->asyncResp->res, "Chassis",
+                                   sensorsAsyncResp->chassisId);
+        return;
+    }
+
+    getHparModeThen([sensorsAsyncResp, powerControlCollections =
+                                           std::move(powerControlCollections)](
+                        int mode) {
+        std::vector<int> hosts = powerCapHostsForMode(mode);
+
+        // One PowerControl member per host this mode exposes. Reject more
+        // members than the mode supports (e.g. 2 controls in 2P).
+        if (powerControlCollections.empty() ||
+            powerControlCollections.size() > hosts.size())
+        {
+            BMCWEB_LOG_WARNING(
+                "Unexpected PowerControl count {} for {} host(s) ",
+                powerControlCollections.size(), hosts.size());
+            messages::resourceNotFound(sensorsAsyncResp->asyncResp->res,
+                                       "Power", "PowerControl");
+            return;
+        }
+
+        for (size_t i = 0; i < powerControlCollections.size(); ++i)
+        {
+            nlohmann::json::object_t item = powerControlCollections[i];
+
+            // Route by MemberId when the client provides it, so a single
+            // PowerControl member can target one specific CPU/host in 2x1P
+            // (e.g. PATCH only MemberId "1" -> host2) without touching the
+            // other CPU. Fall back to array position so the legacy
+            // single-host PATCH (no MemberId) keeps working.
+            size_t memberIndex = i;
+            auto memberIt = item.find("MemberId");
+            if (memberIt != item.end())
+            {
+                const std::string* memberId =
+                    memberIt->second.get_ptr<const std::string*>();
+                if (memberId == nullptr)
+                {
+                    messages::propertyValueTypeError(
+                        sensorsAsyncResp->asyncResp->res, memberIt->second,
+                        "MemberId");
+                    return;
+                }
+                size_t parsed = 0;
+                try
+                {
+                    parsed = static_cast<size_t>(std::stoul(*memberId));
+                }
+                catch (...)
+                {
+                    messages::propertyValueFormatError(
+                        sensorsAsyncResp->asyncResp->res, *memberId,
+                        "MemberId");
+                    return;
+                }
+                memberIndex = parsed;
+
+                // Drop MemberId before handing the object to
+                // applyPowerCapMember: its readJsonObject only consumes
+                // PowerLimit/LimitInWatts and would reject MemberId as an
+                // unrecognized property (HTTP 400).
+                item.erase("MemberId");
+            }
+
+            if (memberIndex >= hosts.size())
+            {
+                messages::propertyValueOutOfRange(
+                    sensorsAsyncResp->asyncResp->res,
+                    std::to_string(memberIndex), "MemberId");
+                return;
+            }
+
+            applyPowerCapMember(sensorsAsyncResp, hosts[memberIndex],
+                                std::move(item));
+        }
+    });
 }
 
 inline void afterPowerCapSettingGet(
     const std::shared_ptr<SensorsAsyncResp>& sensorAsyncResp,
-    const boost::system::error_code& ec,
+    size_t memberIndex, bool multiHost, const boost::system::error_code& ec,
     const dbus::utility::DBusPropertiesMap& properties)
 {
     if (ec)
     {
-        messages::internalError(sensorAsyncResp->asyncResp->res);
+        if (memberIndex == 0)
+        {
+            messages::internalError(sensorAsyncResp->asyncResp->res);
+        }
         BMCWEB_LOG_ERROR("Power Limit GetAll handler: Dbus error {}", ec);
         return;
     }
@@ -153,23 +321,31 @@ inline void afterPowerCapSettingGet(
     nlohmann::json& tempArray =
         sensorAsyncResp->asyncResp->res.jsonValue["PowerControl"];
 
-    // Put multiple "sensors" into a single PowerControl, 0,
-    // so only create the first one
-    if (tempArray.empty())
+    // Ensure a PowerControl member exists at memberIndex. In 2P there is a
+    // single member (index 0, shared with the chassis power sensors). In 2x1P
+    // each CPU gets its own member.
+    while (tempArray.size() <= memberIndex)
     {
-        // Mandatory properties odata.id and MemberId
-        // A warning without a odata.type
+        size_t idx = tempArray.size();
         nlohmann::json::object_t powerControl;
         powerControl["@odata.type"] = "#Power.v1_0_0.PowerControl";
         powerControl["@odata.id"] =
             "/redfish/v1/Chassis/" + sensorAsyncResp->chassisId +
-            "/Power#/PowerControl/0";
-        powerControl["Name"] = "Chassis Power Control";
-        powerControl["MemberId"] = "0";
+            "/Power#/PowerControl/" + std::to_string(idx);
+        powerControl["MemberId"] = std::to_string(idx);
+        if (multiHost)
+        {
+            powerControl["Name"] = "CPU " + std::to_string(idx) +
+                                   " Power Control";
+        }
+        else
+        {
+            powerControl["Name"] = "Chassis Power Control";
+        }
         tempArray.emplace_back(std::move(powerControl));
     }
 
-    nlohmann::json& sensorJson = tempArray.back();
+    nlohmann::json& sensorJson = tempArray[memberIndex];
     bool enabled = false;
     double powerCap = 0.0;
     int64_t scale = 0;
@@ -280,14 +456,24 @@ inline void afterGetChassis(
         return;
     }
 
-    dbus::utility::getAllProperties(
-        "xyz.openbmc_project.Settings",
-        "/xyz/openbmc_project/control/host0/power_cap",
-        "xyz.openbmc_project.Control.Power.Cap",
-        [sensorAsyncResp](const boost::system::error_code& ec,
-                          const dbus::utility::DBusPropertiesMap& properties
-
-        ) { afterPowerCapSettingGet(sensorAsyncResp, ec, properties); });
+    // Expose one PowerControl member per host the running HPAR mode owns.
+    getHparModeThen([sensorAsyncResp](int mode) {
+        std::vector<int> hosts = powerCapHostsForMode(mode);
+        bool multiHost = hosts.size() > 1;
+        for (size_t i = 0; i < hosts.size(); ++i)
+        {
+            size_t memberIndex = i;
+            dbus::utility::getAllProperties(
+                "xyz.openbmc_project.Settings", powerCapObjectPath(hosts[i]),
+                "xyz.openbmc_project.Control.Power.Cap",
+                [sensorAsyncResp, memberIndex, multiHost](
+                    const boost::system::error_code& ec,
+                    const dbus::utility::DBusPropertiesMap& properties) {
+                    afterPowerCapSettingGet(sensorAsyncResp, memberIndex,
+                                            multiHost, ec, properties);
+                });
+        }
+    });
 }
 
 inline void handleChassisPowerGet(
