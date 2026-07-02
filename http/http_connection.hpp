@@ -209,7 +209,7 @@ class Connection :
     {
         BMCWEB_LOG_DEBUG("{} Connection started, total {}", logPtr(this),
                          connectionCount);
-        if (connectionCount >= 200)
+        if (connectionCount > 200)
         {
             BMCWEB_LOG_CRITICAL("{} Max connection count exceeded.",
                                 logPtr(this));
@@ -798,6 +798,7 @@ class Connection :
         if (ec)
         {
             BMCWEB_LOG_DEBUG("{} from write(2)", logPtr(this));
+            gracefulClose();
             return;
         }
 
