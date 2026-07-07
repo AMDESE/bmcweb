@@ -1342,13 +1342,20 @@ inline computer_system::PowerRestorePolicyTypes
  * @return None.
  */
 inline void getPowerRestorePolicy(
-    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, uint8_t hostNumber = 0)
 {
-    BMCWEB_LOG_DEBUG("Get power restore policy");
+    BMCWEB_LOG_DEBUG("Get power restore policy for host {}", hostNumber);
+
+    // Each host instance owns its own power_restore_policy settings object.
+    // host0 is used for 2P (single host); host1/host2 are the independent
+    // 2x1P partitions. This mirrors the per-host object used by
+    // x86-power-control's PowerRestoreController.
+    std::string objectPath =
+        "/xyz/openbmc_project/control/host" + std::to_string(hostNumber) +
+        "/power_restore_policy";
 
     dbus::utility::getProperty<std::string>(
-        "xyz.openbmc_project.Settings",
-        "/xyz/openbmc_project/control/host0/power_restore_policy",
+        "xyz.openbmc_project.Settings", objectPath,
         "xyz.openbmc_project.Control.Power.RestorePolicy", "PowerRestorePolicy",
         [asyncResp](const boost::system::error_code& ec,
                     const std::string& policy) {
@@ -1953,9 +1960,9 @@ inline std::string dbusPowerRestorePolicyFromRedfish(std::string_view policy)
  */
 inline void setPowerRestorePolicy(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    std::string_view policy)
+    std::string_view policy, uint8_t hostNumber = 0)
 {
-    BMCWEB_LOG_DEBUG("Set power restore policy.");
+    BMCWEB_LOG_DEBUG("Set power restore policy for host {}.", hostNumber);
 
     std::string powerRestorePolicy = dbusPowerRestorePolicyFromRedfish(policy);
 
@@ -1966,10 +1973,15 @@ inline void setPowerRestorePolicy(
         return;
     }
 
+    // Target this host instance's settings object (host0 for 2P, host1/host2
+    // for the independent 2x1P partitions).
+    std::string objectPath =
+        "/xyz/openbmc_project/control/host" + std::to_string(hostNumber) +
+        "/power_restore_policy";
+
     setDbusProperty(
         asyncResp, "PowerRestorePolicy", "xyz.openbmc_project.Settings",
-        sdbusplus::message::object_path(
-            "/xyz/openbmc_project/control/host0/power_restore_policy"),
+        sdbusplus::message::object_path(objectPath),
         "xyz.openbmc_project.Control.Power.RestorePolicy", "PowerRestorePolicy",
         powerRestorePolicy);
 }
@@ -3154,6 +3166,8 @@ inline void handleComputerSystemGet(
     {
         //for now enable Host status, TODO need to enable rest of system function
         getHostState(asyncResp, hostNumber);
+        // Per-partition power restore policy (host1 = P0, host2 = P1 in 2x1P).
+        getPowerRestorePolicy(asyncResp, hostNumber);
     }
     else
     {
@@ -3319,7 +3333,18 @@ inline void handleComputerSystemPatch(
 
     if (powerRestorePolicy)
     {
-        setPowerRestorePolicy(asyncResp, *powerRestorePolicy);
+        // Route the write to the correct per-host settings object. host0 (2P)
+        // is the default; host1/host2 select the independent 2x1P partitions.
+        uint8_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+        if (hostNumber > 2)
+        {
+            messages::actionParameterNotSupported(
+                asyncResp->res, std::to_string(hostNumber), "HostNumber");
+        }
+        else
+        {
+            setPowerRestorePolicy(asyncResp, *powerRestorePolicy, hostNumber);
+        }
     }
 
     if (powerMode)
