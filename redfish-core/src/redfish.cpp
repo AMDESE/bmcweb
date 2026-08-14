@@ -167,6 +167,7 @@ RedfishService::RedfishService(App& app)
     requestRoutesPprFile(app);
 
     requestRoutesOobErrorInjection(app);
+    requestRoutesProcessorMetrics(app);
 
     requestRoutesProcessorCollection(app);
     requestRoutesProcessor(app);
@@ -193,14 +194,14 @@ RedfishService::RedfishService(App& app)
         requestRoutesDBusEventLogEntryCollection(app);
         requestRoutesDBusEventLogEntry(app);
         requestRoutesDBusEventLogEntryDownload(app);
-	requestRoutesDBusEventLogEntryPost(app);
+        requestRoutesDBusEventLogEntryPost(app);
     }
     else
     {
         requestRoutesJournalEventLogEntryCollection(app);
         requestRoutesJournalEventLogEntry(app);
         requestRoutesJournalEventLogClear(app);
-	requestRoutesJournalEventLogEntryPost(app);
+        requestRoutesJournalEventLogEntryPost(app);
     }
 
     if constexpr (BMCWEB_REDFISH_HOST_LOGGER)
