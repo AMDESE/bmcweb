@@ -1327,7 +1327,18 @@ inline void getSoftwareVersion(
                 if (hostVersions != nullptr &&
                     hostNumber < hostVersions->size())
                 {
-                    version = &(*hostVersions)[hostNumber];
+                    const std::string& hostVersion = (*hostVersions)[hostNumber];
+                    if (!hostVersion.empty() &&
+                        !bmcweb::asciiIEquals(hostVersion, "Unknown"))
+                    {
+                        version = &hostVersion;
+                    }
+                    else
+                    {
+                        BMCWEB_LOG_DEBUG(
+                            "HostVersions[{}] is empty/Unknown, using default BIOS Version",
+                            hostNumber);
+                    }
                 }
             }
 
