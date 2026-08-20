@@ -74,6 +74,15 @@ inline std::string getBMCUpdateServicePath()
     return "/xyz/openbmc_project/software";
 }
 
+inline void flushPersistentSessions()
+{
+    persistent_data::SessionStore::getInstance().applySessionTimeouts();
+    if (persistent_data::SessionStore::getInstance().needsWrite())
+    {
+        persistent_data::getConfig().writeData();
+    }
+}
+
 /**
  * Function reboots the BMC.
  *
@@ -82,6 +91,9 @@ inline std::string getBMCUpdateServicePath()
 inline void doBMCGracefulRestart(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 {
+    // Persist sessions before reboot so web UI login survives BMC reset.
+    flushPersistentSessions();
+
     const char* processName = "xyz.openbmc_project.State.BMC";
     const char* objectPath = "/xyz/openbmc_project/state/bmc0";
     const char* interfaceName = "xyz.openbmc_project.State.BMC";
@@ -109,6 +121,8 @@ inline void doBMCGracefulRestart(
 inline void doBMCForceRestart(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 {
+    flushPersistentSessions();
+
     const char* processName = "xyz.openbmc_project.State.BMC";
     const char* objectPath = "/xyz/openbmc_project/state/bmc0";
     const char* interfaceName = "xyz.openbmc_project.State.BMC";

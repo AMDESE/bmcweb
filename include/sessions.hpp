@@ -434,6 +434,12 @@ class SessionStore
     {
         return needWrite;
     }
+
+    void clearNeedWrite()
+    {
+        needWrite = false;
+    }
+
     int64_t getTimeoutInSeconds() const
     {
         return std::chrono::seconds(timeoutInSeconds).count();
