@@ -8,6 +8,7 @@
 #include "verb.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/http/status.hpp>
 
@@ -53,7 +54,22 @@ class BaseRule
     {
         asyncResp->res.result(boost::beast::http::status::not_found);
     }
+    virtual void handleUpgrade(
+        const Request& /*req*/,
+        const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+        boost::asio::local::stream_protocol::socket&& /*adaptor*/)
+    {
+        asyncResp->res.result(boost::beast::http::status::not_found);
+    }
 
+    virtual void handleUpgrade(
+        const Request& /*req*/,
+        const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+        boost::asio::ssl::stream<
+            boost::asio::local::stream_protocol::socket>&& /*adaptor*/)
+    {
+        asyncResp->res.result(boost::beast::http::status::not_found);
+    }
     virtual void handleUpgrade(
         const Request& /*req*/,
         const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,

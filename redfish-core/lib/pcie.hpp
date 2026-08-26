@@ -29,13 +29,16 @@
 #include <boost/url/format.hpp>
 #include <sdbusplus/unpack_properties.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <format>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,7 +50,17 @@
 namespace redfish
 {
 
-inline void handlePCIeDevicePath(
+static inline std::string toUpperCase(const std::string& input)
+{
+    std::string result = input;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+    return result;
+}
+using InnerMap = std::map<std::string, std::variant<int64_t, std::string>>;
+using OuterMap = std::map<std::string, InnerMap>;
+
+static inline void handlePCIeDevicePath(
     const std::string& pcieDeviceId,
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const dbus::utility::MapperGetSubTreePathsResponse& pcieDevicePaths,
@@ -425,6 +438,81 @@ inline void getPCIeDeviceState(
         });
 }
 
+inline void getPCIeDeviceAsset(
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& pcieDevicePath, const std::string& service)
+{
+    dbus::utility::getAllProperties(
+        service, pcieDevicePath,
+        "xyz.openbmc_project.Inventory.Decorator.Asset",
+        [pcieDevicePath, asyncResp{asyncResp}](
+            const boost::system::error_code& ec,
+            const dbus::utility::DBusPropertiesMap& assetList) {
+            if (ec)
+            {
+                if (ec.value() != EBADR)
+                {
+                    BMCWEB_LOG_ERROR("DBUS response error for Properties{}",
+                                     ec.value());
+                    messages::internalError(asyncResp->res);
+                }
+                return;
+            }
+
+            const std::string* manufacturer = nullptr;
+            const std::string* model = nullptr;
+            const std::string* partNumber = nullptr;
+            const std::string* serialNumber = nullptr;
+            const std::string* sparePartNumber = nullptr;
+
+            const bool success = sdbusplus::unpackPropertiesNoThrow(
+                dbus_utils::UnpackErrorPrinter(), assetList, "Manufacturer",
+                manufacturer, "Model", model, "PartNumber", partNumber,
+                "SerialNumber", serialNumber, "SparePartNumber",
+                sparePartNumber);
+
+            if (!success)
+            {
+                messages::internalError(asyncResp->res);
+                return;
+            }
+
+            if (manufacturer != nullptr)
+            {
+                asyncResp->res.jsonValue["Manufacturer"] = *manufacturer;
+            }
+            if (model != nullptr)
+            {
+                asyncResp->res.jsonValue["Model"] = *model;
+            }
+
+            if (partNumber != nullptr && !partNumber->empty() &&
+                *partNumber != "Not Available")
+            {
+                asyncResp->res.jsonValue["PartNumber"] = *partNumber;
+            }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "PartNumber");
+            }
+
+            if (serialNumber != nullptr && !serialNumber->empty() &&
+                *serialNumber != "Not Available")
+            {
+                asyncResp->res.jsonValue["SerialNumber"] = *serialNumber;
+            }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
+            }
+
+            if (sparePartNumber != nullptr && !sparePartNumber->empty())
+            {
+                asyncResp->res.jsonValue["SparePartNumber"] = *sparePartNumber;
+            }
+        });
+}
+
 inline void addPCIeDeviceProperties(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const std::string& pcieDeviceId,
@@ -610,12 +698,86 @@ inline void handlePCIeDeviceGet(
         std::bind_front(afterGetValidPcieDevicePath, asyncResp, pcieDeviceId));
 }
 
+/**
+ * @brief PCIeDevicePost will be used by BIOS to Post Pcie data to BMC
+ *
+ **/
+inline void handlePCIeDevicePost(
+    App& app, const crow::Request& req,
+
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& pcieDeviceId)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        // Option currently returns no systems.  TBD
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    nlohmann::json pciePostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
+    InnerMap pcieDataMap;
+    for (auto& [key, value] : pciePostJsonObject.items())
+    {
+        if (value.is_number_integer())
+        {
+            pcieDataMap[toUpperCase(key)] = value.get<int64_t>();
+        }
+        else if (value.is_string())
+        {
+            pcieDataMap[toUpperCase(key)] = value.get<std::string>();
+        }
+        else
+        {
+            // Handle other types as needed
+            BMCWEB_LOG_ERROR("Not a valid input");
+            asyncResp->res.jsonValue["Status"] = "Error";
+            asyncResp->res.jsonValue["message"] = "Not valid input";
+            return;
+        }
+    }
+
+    OuterMap pcieMap;
+    pcieMap[pcieDeviceId] = pcieDataMap;
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code ec) {
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("SetPcieData - D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "SetPcieData", pcieMap);
+
+    asyncResp->res.jsonValue["Status"] = "OK";
+}
+
 inline void requestRoutesSystemPCIeDevice(App& app)
 {
     BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/PCIeDevices/<str>/")
         .privileges(redfish::privileges::getPCIeDevice)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handlePCIeDeviceGet, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/PCIeDevices/<str>/")
+        .privileges(redfish::privileges::postPCIeDevice)
+        .methods(boost::beast::http::verb::post)(
+            std::bind_front(handlePCIeDevicePost, std::ref(app)));
 }
 
 inline void addPCIeFunctionList(

@@ -190,6 +190,7 @@ RedfishService::RedfishService(App& app)
     }
 
     requestRoutesProcessor(app);
+    requestRoutesOobErrorInjection(app);
     requestRoutesOperatingConfig(app);
     requestRoutesMemory(app);
 

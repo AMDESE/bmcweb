@@ -9,6 +9,7 @@
 #include "websocket.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include <boost/beast/http/status.hpp>
 
@@ -52,6 +53,17 @@ class WebSocketRule : public BaseRule
                        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
                        boost::asio::ssl::stream<boost::asio::ip::tcp::socket>&&
                            adaptor) override;
+
+    void handleUpgrade(
+        const Request& req,
+        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+        boost::asio::local::stream_protocol::socket&& adaptor) override;
+
+    void handleUpgrade(
+        const Request& req,
+        const std::shared_ptr<bmcweb::AsyncResp>& /*asyncResp*/,
+        boost::asio::ssl::stream<boost::asio::local::stream_protocol::socket>&&
+            adaptor) override;
 
     template <typename Func>
     self_t& onopen(Func f)

@@ -43,6 +43,7 @@ inline void handleMessageRegistryFileCollectionGet(
         "Collection of MessageRegistryFiles";
 
     nlohmann::json& members = asyncResp->res.jsonValue["Members"];
+    members.push_back({{"@odata.id", "/redfish/v1/Registries/BiosAttributeRegistry"}});
 
     for (const auto& memberName : std::views::keys(registries::allRegistries()))
     {
@@ -74,6 +75,13 @@ inline void handleMessageRoutesMessageRegistryFileGet(
     {
         return;
     }
+
+    if (registry == "BiosAttributeRegistry")
+    {
+       handleBiosAttributeRegistryMetadataGet(app, req, asyncResp);
+       return;
+    }
+
     std::string dmtf = "DMTF ";
     std::optional<registries::RegistryEntryRef> registryEntry =
         registries::getRegistryFromPrefix(registry);

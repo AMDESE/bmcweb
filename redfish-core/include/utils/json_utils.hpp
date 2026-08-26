@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +86,14 @@ struct IsVariant : std::false_type
 
 template <typename... Types>
 struct IsVariant<std::variant<Types...>> : std::true_type
+{};
+
+template <typename Type>
+struct IsMap : std::false_type
+{};
+
+template <>
+struct IsMap<std::map<std::string, std::string>> : std::true_type
 {};
 
 enum class UnpackErrorCode
@@ -347,6 +356,26 @@ bool unpackValue(nlohmann::json& jsonValue, std::string_view key,
             return false;
         }
     }
+    else if constexpr (IsMap<Type>::value)
+    {
+        if (!jsonValue.is_object())
+        {
+            messages::propertyValueTypeError(res, res.jsonValue, key);
+            return false;
+        }
+
+        value.clear();
+        for (auto& [jsonKey, jsonVal] : jsonValue.items())
+        {
+            if (!jsonVal.is_string())
+            {
+                messages::propertyValueTypeError(res, res.jsonValue, key);
+                return false;
+            }
+
+            value[jsonKey] = jsonVal.get<std::string>();
+        }
+    }
     else
     {
         UnpackErrorCode ec = unpackValueWithErrorCode(jsonValue, key, value);
@@ -478,6 +507,7 @@ using UnpackVariant = std::variant<
     std::optional<bool>*,
     std::optional<double>*,
     std::optional<std::string>*,
+    std::optional<std::map<std::string, std::string>>*,
     std::optional<nlohmann::json::object_t>*,
     std::optional<std::vector<uint8_t>>*,
     std::optional<std::vector<uint16_t>>*,
@@ -961,6 +991,15 @@ inline size_t hashJsonWithoutKey(const nlohmann::json& jsonValue,
         }
     }
     return seed;
+}
+
+// Convert json Key to Upper case
+inline std::string toUpperCase(const std::string& input)
+{
+    std::string result = input;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+    return result;
 }
 
 } // namespace json_util

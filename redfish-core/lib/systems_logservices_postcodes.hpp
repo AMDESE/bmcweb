@@ -124,6 +124,19 @@ inline void handleSystemsLogServicesPostCodesPost(
     }
     BMCWEB_LOG_DEBUG("Do delete all postcodes entries.");
 
+    uint8_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+    }
+
+    std::string service =
+        "xyz.openbmc_project.State.Boot.PostCode" + std::to_string(hostNumber);
+
+    std::string objectPath =
+        "/xyz/openbmc_project/State/Boot/PostCode" + std::to_string(hostNumber);
+
     // Make call to post-code service to request clear all
     dbus::utility::async_method_call(
         asyncResp,
@@ -140,9 +153,8 @@ inline void handleSystemsLogServicesPostCodesPost(
             }
             messages::success(asyncResp->res);
         },
-        "xyz.openbmc_project.State.Boot.PostCode0",
-        "/xyz/openbmc_project/State/Boot/PostCode0",
-        "xyz.openbmc_project.Collection.DeleteAll", "DeleteAll");
+        service, objectPath, "xyz.openbmc_project.Collection.DeleteAll",
+        "DeleteAll");
 }
 
 /**
@@ -326,7 +338,7 @@ static bool fillPostCodeEntry(
 
 inline void getPostCodeForEntry(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& entryId)
+    const std::string& entryId, uint8_t hostNumber)
 {
     uint16_t bootIndex = 0;
     uint64_t codeIndex = 0;
@@ -344,14 +356,39 @@ inline void getPostCodeForEntry(
         return;
     }
 
+    std::string service =
+        "xyz.openbmc_project.State.Boot.PostCode" + std::to_string(hostNumber);
+
+    std::string objectPath =
+        "/xyz/openbmc_project/State/Boot/PostCode" + std::to_string(hostNumber);
+
+    dbus::utility::getProperty<uint16_t>(
+         service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "CurrentBootCycleCount",
+        [asyncResp, entryId, bootIndex, codeIndex, service, objectPath](
+            const boost::system::error_code& ec, const uint16_t bootCount) {
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("DBUS response error {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            if (bootIndex > bootCount)
+            {
+                messages::resourceNotFound(asyncResp->res, "LogEntry", entryId);
+                return;
+            }
+            uint16_t dbusBootIndex =
+                static_cast<uint16_t>(bootCount - bootIndex + 1);
+
     dbus::utility::async_method_call(
         asyncResp,
         [asyncResp, entryId, bootIndex,
-         codeIndex](const boost::system::error_code& ec,
+         codeIndex](const boost::system::error_code& ec2,
                     const boost::container::flat_map<
                         uint64_t, std::tuple<std::vector<uint8_t>,
                                              std::vector<uint8_t>>>& postcode) {
-            if (ec)
+            if (ec2)
             {
                 BMCWEB_LOG_DEBUG("DBUS POST CODE PostCode response error");
                 messages::internalError(asyncResp->res);
@@ -370,24 +407,31 @@ inline void getPostCodeForEntry(
                 return;
             }
         },
-        "xyz.openbmc_project.State.Boot.PostCode0",
-        "/xyz/openbmc_project/State/Boot/PostCode0",
-        "xyz.openbmc_project.State.Boot.PostCode", "GetPostCodesWithTimeStamp",
-        bootIndex);
+        service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "GetPostCodesWithTimeStamp", dbusBootIndex);
+        });
 }
 
 inline void getPostCodeForBoot(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const uint16_t bootIndex, const uint16_t bootCount,
-    const uint64_t entryCount, size_t skip, size_t top)
+    const uint64_t entryCount, size_t skip, size_t top, uint8_t hostNumber)
 {
+    std::string service =
+        "xyz.openbmc_project.State.Boot.PostCode" + std::to_string(hostNumber);
+
+    std::string objectPath =
+        "/xyz/openbmc_project/State/Boot/PostCode" + std::to_string(hostNumber);
+
+    uint16_t dbusBootIndex = static_cast<uint16_t>(bootCount - bootIndex + 1);
+
     dbus::utility::async_method_call(
         asyncResp,
-        [asyncResp, bootIndex, bootCount, entryCount, skip,
-         top](const boost::system::error_code& ec,
-              const boost::container::flat_map<
-                  uint64_t, std::tuple<std::vector<uint8_t>,
-                                       std::vector<uint8_t>>>& postcode) {
+        [asyncResp, bootIndex, bootCount, entryCount, skip, top, hostNumber](
+            const boost::system::error_code& ec,
+            const boost::container::flat_map<
+                uint64_t, std::tuple<std::vector<uint8_t>,
+                                     std::vector<uint8_t>>>& postcode) {
             if (ec)
             {
                 BMCWEB_LOG_DEBUG("DBUS POST CODE PostCode response error");
@@ -419,7 +463,7 @@ inline void getPostCodeForBoot(
             {
                 getPostCodeForBoot(asyncResp,
                                    static_cast<uint16_t>(bootIndex + 1),
-                                   bootCount, endCount, skip, top);
+                                   bootCount, endCount, skip, top, hostNumber);
             }
             else if (skip + top < endCount)
             {
@@ -430,30 +474,34 @@ inline void getPostCodeForBoot(
                     std::to_string(skip + top);
             }
         },
-        "xyz.openbmc_project.State.Boot.PostCode0",
-        "/xyz/openbmc_project/State/Boot/PostCode0",
-        "xyz.openbmc_project.State.Boot.PostCode", "GetPostCodesWithTimeStamp",
-        bootIndex);
+        service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "GetPostCodesWithTimeStamp", dbusBootIndex);
 }
 
 inline void getCurrentBootNumber(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, size_t skip,
-    size_t top)
+    size_t top, uint8_t hostNumber)
 {
     uint64_t entryCount = 0;
+    std::string service =
+        "xyz.openbmc_project.State.Boot.PostCode" + std::to_string(hostNumber);
+
+    std::string objectPath =
+        "/xyz/openbmc_project/State/Boot/PostCode" + std::to_string(hostNumber);
+
     dbus::utility::getProperty<uint16_t>(
-        "xyz.openbmc_project.State.Boot.PostCode0",
-        "/xyz/openbmc_project/State/Boot/PostCode0",
-        "xyz.openbmc_project.State.Boot.PostCode", "CurrentBootCycleCount",
-        [asyncResp, entryCount, skip,
-         top](const boost::system::error_code& ec, const uint16_t bootCount) {
+        service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "CurrentBootCycleCount",
+        [asyncResp, entryCount, skip, top, hostNumber](
+            const boost::system::error_code& ec, const uint16_t bootCount) {
             if (ec)
             {
                 BMCWEB_LOG_DEBUG("DBUS response error {}", ec);
                 messages::internalError(asyncResp->res);
                 return;
             }
-            getPostCodeForBoot(asyncResp, 1, bootCount, entryCount, skip, top);
+            getPostCodeForBoot(asyncResp, 1, bootCount, entryCount, skip, top,
+                               hostNumber);
         });
 }
 
@@ -486,6 +534,14 @@ inline void handleSystemsLogServicesPostCodesEntriesGet(
                                    systemName);
         return;
     }
+
+    uint8_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+    }
+
     asyncResp->res.jsonValue["@odata.type"] =
         "#LogEntryCollection.LogEntryCollection";
     asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
@@ -498,7 +554,7 @@ inline void handleSystemsLogServicesPostCodesEntriesGet(
     asyncResp->res.jsonValue["Members@odata.count"] = 0;
     size_t skip = delegatedQuery.skip.value_or(0);
     size_t top = delegatedQuery.top.value_or(query_param::Query::maxTop);
-    getCurrentBootNumber(asyncResp, skip, top);
+    getCurrentBootNumber(asyncResp, skip, top, hostNumber);
 }
 
 inline void handleSystemsLogServicesPostCodesEntriesEntryAdditionalDataGet(
@@ -539,21 +595,54 @@ inline void handleSystemsLogServicesPostCodesEntriesEntryAdditionalDataGet(
         return;
     }
 
-    dbus::utility::async_method_call(
-        asyncResp,
-        [asyncResp, postCodeID, currentValue](
-            const boost::system::error_code& ec,
-            const std::vector<std::tuple<std::vector<uint8_t>,
-                                         std::vector<uint8_t>>>& postcodes) {
-            if (ec.value() == EBADR)
+    uint8_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+    }
+
+    std::string service =
+        "xyz.openbmc_project.State.Boot.PostCode" + std::to_string(hostNumber);
+
+    std::string objectPath =
+        "/xyz/openbmc_project/State/Boot/PostCode" + std::to_string(hostNumber);
+
+    dbus::utility::getProperty<uint16_t>(
+        service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "CurrentBootCycleCount",
+        [asyncResp, postCodeID, currentValue, index, service, objectPath](
+            const boost::system::error_code& ec, const uint16_t bootCount) {
+            if (ec)
+            {
+                BMCWEB_LOG_DEBUG("DBUS response error {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            if (index > bootCount)
             {
                 messages::resourceNotFound(asyncResp->res, "LogEntry",
                                            postCodeID);
                 return;
             }
-            if (ec)
+            uint16_t dbusBootIndex =
+                static_cast<uint16_t>(bootCount - index + 1);
+
+    dbus::utility::async_method_call(
+        asyncResp,
+        [asyncResp, postCodeID, currentValue](
+            const boost::system::error_code& ec2,
+            const std::vector<std::tuple<std::vector<uint8_t>,
+                                         std::vector<uint8_t>>>& postcodes) {
+            if (ec2.value() == EBADR)
             {
-                BMCWEB_LOG_DEBUG("DBUS response error {}", ec);
+                messages::resourceNotFound(asyncResp->res, "LogEntry",
+                                           postCodeID);
+                return;
+            }
+            if (ec2)
+            {
+                BMCWEB_LOG_DEBUG("DBUS response error {}", ec2);
                 messages::internalError(asyncResp->res);
                 return;
             }
@@ -584,9 +673,9 @@ inline void handleSystemsLogServicesPostCodesEntriesEntryAdditionalDataGet(
             asyncResp->res.addHeader("Content-Transfer-Encoding", "Base64");
             asyncResp->res.write(crow::utility::base64encode(strData));
         },
-        "xyz.openbmc_project.State.Boot.PostCode0",
-        "/xyz/openbmc_project/State/Boot/PostCode0",
-        "xyz.openbmc_project.State.Boot.PostCode", "GetPostCodes", index);
+        service, objectPath, "xyz.openbmc_project.State.Boot.PostCode",
+        "GetPostCodes", dbusBootIndex);
+        });
 }
 
 inline void handleSystemsLogServicesPostCodesEntriesEntryGet(
@@ -612,7 +701,13 @@ inline void handleSystemsLogServicesPostCodesEntriesEntryGet(
         return;
     }
 
-    getPostCodeForEntry(asyncResp, targetID);
+    uint8_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+    }
+    getPostCodeForEntry(asyncResp, targetID, hostNumber);
 }
 
 inline void requestRoutesSystemsLogServicesPostCode(App& app)

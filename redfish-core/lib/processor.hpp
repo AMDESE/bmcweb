@@ -160,6 +160,25 @@ inline void getCpuDataByInterface(
                     asyncResp->res.jsonValue["TotalThreads"] = *value;
                 }
             }
+            else if (property.first == "VendorId")
+            {
+                const std::string* value =
+                    std::get_if<std::string>(&property.second);
+                if (value != nullptr)
+                {
+                    asyncResp->res.jsonValue["VendorId"] = *value;
+                }
+            }
+            else if (property.first == "Family")
+            {
+                const std::string* value =
+                    std::get_if<std::string>(&property.second);
+                if (value != nullptr)
+                {
+                    asyncResp->res.jsonValue["ProcessorId"]["Family"] =
+                        "0x" + *value;
+                }
+            }
             else if (property.first == "EffectiveFamily")
             {
                 const uint16_t* value = std::get_if<uint16_t>(&property.second);
@@ -192,6 +211,10 @@ inline void getCpuDataByInterface(
                     asyncResp->res
                         .jsonValue["ProcessorId"]["IdentificationRegisters"] =
                         std::format("{:#016x}", *value);
+                }
+                else
+                {
+                    messages::propertyNotUpdated(asyncResp->res, "PPIN");
                 }
             }
             else if (property.first == "Microcode")
@@ -390,6 +413,10 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
             {
                 asyncResp->res.jsonValue["SerialNumber"] = *serialNumber;
             }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
+            }
 
             if ((model != nullptr) && !model->empty())
             {
@@ -418,9 +445,13 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
                 }
             }
 
-            if (partNumber != nullptr)
+            if (partNumber != nullptr && !partNumber->empty())
             {
                 asyncResp->res.jsonValue["PartNumber"] = *partNumber;
+            }
+            else
+            {
+                messages::propertyNotUpdated(asyncResp->res, "PartNumber");
             }
 
             if (sparePartNumber != nullptr && !sparePartNumber->empty())
@@ -1008,6 +1039,18 @@ inline void handleProcessorGet(
     getProcessorObject(
         asyncResp, processorId,
         std::bind_front(getProcessorData, asyncResp, processorId));
+
+    asyncResp->res.jsonValue["Actions"]["Oem"] = {
+        {"#Processor.OobErrorInjectionMode",
+         {{"target", "/redfish/v1/Systems/system/Processors/" + processorId +
+                         "/Actions/Oem/Processor.OobErrorInjectionMode"}}},
+        {"#Processor.SupportedErrorTypes",
+         {{"target", "/redfish/v1/Systems/system/Processors/" + processorId +
+                         "/Actions/Oem/Processor.SupportedErrorTypes"}}}};
+    asyncResp->res.jsonValue["Oem"]["AMD"]["SocConfiguration"]["@odata.id"] =
+        boost::urls::format(
+            "/redfish/v1/Systems/{}/Processors/{}/Oem/AMD/SocConfiguration/Token",
+            BMCWEB_REDFISH_SYSTEM_URI_NAME, processorId);
 }
 
 inline void doPatchProcessor(
@@ -1158,5 +1201,132 @@ inline void requestRoutesProcessor(App& app)
         .methods(boost::beast::http::verb::patch)(
             std::bind_front(handleProcessorPatch, std::ref(app)));
 }
+
+inline void requestRoutesOobErrorInjection(App& app)
+{
+    /**
+     * Functions triggers appropriate requests on DBus
+     */
+
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Systems/<str>/Processors/<str>/Actions/Oem/Processor.OobErrorInjectionMode")
+        .privileges(redfish::privileges::headProcessor)
+        .methods(boost::beast::http::verb::head)(
+            std::bind_front(handleProcessorHead, std::ref(app)));
+
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Systems/<str>/Processors/<str>/Actions/Oem/Processor.OobErrorInjectionMode")
+        .privileges(redfish::privileges::getProcessor)
+        .methods(boost::beast::http::verb::get)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string&, const std::string& processorId) {
+                if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+                {
+                    return;
+                }
+
+                // Check if there is required param, truly entering this shall
+                // be impossible
+                asyncResp->res.jsonValue["@odata.type"] =
+                    "#Processor.v1_11_0.Processor";
+                asyncResp->res.jsonValue["@odata.id"] =
+                    "/redfish/v1/Systems/system/Processors/" + processorId +
+                    "Actions/Oem/Processor.OobErrorInjectionMode";
+                std::string errorInjectionInterface = "com.amd.ErrorInjection";
+
+                crow::connections::systemBus->async_method_call(
+                    [asyncResp](const boost::system::error_code ec,
+                                const std::string& oobErrorInjectionMode) {
+                        if (ec)
+                        {
+                            messages::internalError(asyncResp->res);
+                            return;
+                        }
+
+                        if (oobErrorInjectionMode.empty())
+                        {
+                            // illegal value
+                            messages::generalError(asyncResp->res);
+                            return;
+                        }
+
+                        if (oobErrorInjectionMode ==
+                            "com.amd.ErrorInjection.Status.Enabled")
+                        {
+                            asyncResp->res.jsonValue["OobErrorInjectionMode"] =
+                                "Enabled";
+                        }
+                        else if (oobErrorInjectionMode ==
+                                 "com.amd.ErrorInjection.Status.Disabled")
+                        {
+                            asyncResp->res.jsonValue["OobErrorInjectionMode"] =
+                                "Disabled";
+                        }
+                        else
+                        {
+                            asyncResp->res.jsonValue["OobErrorInjectionMode"] =
+                                "Unknown";
+                        }
+                    },
+                    "xyz.openbmc_project.ErrorInjection",
+                    "/xyz/openbmc_project/ErrorInjection",
+                    errorInjectionInterface, "GetOobErrorInjectMode");
+            });
+
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Systems/<str>/Processors/<str>/Actions/Oem/Processor.SupportedErrorTypes")
+        .privileges(redfish::privileges::headProcessor)
+        .methods(boost::beast::http::verb::head)(
+            std::bind_front(handleProcessorHead, std::ref(app)));
+
+    BMCWEB_ROUTE(
+        app,
+        "/redfish/v1/Systems/<str>/Processors/<str>/Actions/Oem/Processor.SupportedErrorTypes")
+        .privileges(redfish::privileges::getProcessor)
+        .methods(boost::beast::http::verb::get)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string&, const std::string& processorId) {
+                if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+                {
+                    return;
+                }
+
+                asyncResp->res.jsonValue["@odata.type"] =
+                    "#Processor.v1_11_0.Processor";
+                asyncResp->res.jsonValue["@odata.id"] =
+                    "/redfish/v1/Systems/system/Processors/" + processorId +
+                    "/Actions/Oem/Processor.SupportedErrorTypes";
+
+                std::string errorInjectionInterface = "com.amd.ErrorInjection";
+
+                crow::connections::systemBus->async_method_call(
+                    [asyncResp](
+                        const boost::system::error_code ec,
+                        const std::vector<std::string>& supportedErrors) {
+                        if (ec)
+                        {
+                            messages::internalError(asyncResp->res);
+                            return;
+                        }
+
+                        if (supportedErrors.empty())
+                        {
+                            messages::generalError(asyncResp->res);
+                            return;
+                        }
+
+                        asyncResp->res.jsonValue["SupportedErrorTypes"] =
+                            supportedErrors;
+                    },
+                    "xyz.openbmc_project.ErrorInjection",
+                    "/xyz/openbmc_project/ErrorInjection",
+                    errorInjectionInterface, "GetOobErrorTypes");
+            });
+};
 
 } // namespace redfish

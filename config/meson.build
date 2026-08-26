@@ -21,6 +21,7 @@ feature_options = [
     'insecure-ignore-content-type',
     'insecure-push-style-notification',
     'kvm',
+    'local-socket',
     'mutual-tls-auth',
     'redfish',
     'redfish-aggregation',
@@ -49,6 +50,7 @@ feature_options = [
 
 string_options = [
     'dns-resolver',
+    'local_socket_path',
     'mutual-tls-common-name-parsing-default',
     'redfish-manager-uri-name',
     'redfish-system-uri-name',
@@ -144,6 +146,26 @@ if https_port > 0
                 'BMCWEB_PORT': https_port,
                 'HTTP_LEVEL_ALLOWED': http_level_allowed,
                 'HTTP_AUTH_LEVEL': 'auth',
+                'HTTP_BIND': '',
+            },
+        ),
+    )
+endif
+
+local_socket_enabled = get_option('local-socket')
+local_socket_path = get_option('local_socket_path')
+
+if local_socket_enabled.allowed()
+    configure_file(
+        input: 'bmcweb.socket.in',
+        output: 'bmcweb.local.socket',
+        install_dir: systemd_system_unit_dir,
+        install: true,
+        configuration: configuration_data(
+            {
+                'BMCWEB_PORT': local_socket_path,
+                'HTTP_LEVEL_ALLOWED': 'http',
+                'HTTP_AUTH_LEVEL': 'noauth',
                 'HTTP_BIND': '',
             },
         ),

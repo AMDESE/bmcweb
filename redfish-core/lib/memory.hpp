@@ -35,15 +35,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace redfish
 {
+
+// define map to receive Dimm data from BIOS
+using InnerMap = std::map<std::string, std::variant<int64_t, std::string>>;
+using OuterMap = std::map<std::string, InnerMap>;
 
 inline std::string translateMemoryTypeToRedfish(const std::string& memoryType)
 {
@@ -420,7 +426,7 @@ inline void assembleDimmProperties(
     const std::string* partNumber = nullptr;
     const std::string* serialNumber = nullptr;
     const std::string* manufacturer = nullptr;
-    const uint16_t* revisionCode = nullptr;
+    const std::string* revisionCode = nullptr;
     const bool* present = nullptr;
     const uint16_t* memoryTotalWidth = nullptr;
     const std::string* ecc = nullptr;
@@ -438,6 +444,9 @@ inline void assembleDimmProperties(
     const std::string* locationCode = nullptr;
     const bool* functional = nullptr;
     const std::string* buildDate = nullptr;
+    const std::string* vendorID = nullptr;
+    const std::string* memoryDeviceType = nullptr;
+    const std::string* deviceLocator = nullptr;
 
     const bool success = sdbusplus::unpackPropertiesNoThrow(
         dbus_utils::UnpackErrorPrinter(), properties, "MemoryDataWidth",
@@ -451,7 +460,8 @@ inline void assembleDimmProperties(
         channel, "MemoryController", memoryController, "Slot", slot, "Socket",
         socket, "SparePartNumber", sparePartNumber, "Model", model,
         "LocationCode", locationCode, "Functional", functional, "BuildDate",
-        buildDate);
+        buildDate, "VendorID", vendorID, "MemoryDeviceType", memoryDeviceType,
+        "DeviceLocator", deviceLocator);
 
     if (!success)
     {
@@ -466,18 +476,27 @@ inline void assembleDimmProperties(
 
     if (memorySizeInKB != nullptr)
     {
-        asyncResp->res.jsonValue[jsonPtr]["CapacityMiB"] =
-            (*memorySizeInKB >> 10);
+        asyncResp->res.jsonValue[jsonPtr]["CapacityMiB"] = *memorySizeInKB ;
     }
 
-    if (partNumber != nullptr)
+    if (partNumber != nullptr && !partNumber->empty() &&
+        *partNumber != "Not Available")
     {
         asyncResp->res.jsonValue[jsonPtr]["PartNumber"] = *partNumber;
     }
+    else
+    {
+        messages::propertyNotUpdated(asyncResp->res, "PartNumber");
+    }
 
-    if (serialNumber != nullptr)
+    if (serialNumber != nullptr && !serialNumber->empty() &&
+        *serialNumber != "Not Available")
     {
         asyncResp->res.jsonValue[jsonPtr]["SerialNumber"] = *serialNumber;
+    }
+    else
+    {
+        messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
     }
 
     if (manufacturer != nullptr)
@@ -487,23 +506,13 @@ inline void assembleDimmProperties(
 
     if (revisionCode != nullptr)
     {
-        asyncResp->res.jsonValue[jsonPtr]["FirmwareRevision"] =
-            std::to_string(*revisionCode);
+        asyncResp->res.jsonValue[jsonPtr]["FirmwareRevision"] = *revisionCode;
     }
 
     if (present != nullptr && !*present)
     {
         asyncResp->res.jsonValue[jsonPtr]["Status"]["State"] =
             resource::State::Absent;
-    }
-
-    if (functional != nullptr)
-    {
-        if (!*functional)
-        {
-            asyncResp->res.jsonValue[jsonPtr]["Status"]["Health"] =
-                resource::Health::Critical;
-        }
     }
 
     if (memoryTotalWidth != nullptr)
@@ -567,25 +576,26 @@ inline void assembleDimmProperties(
 
     if (memoryType != nullptr)
     {
-        std::string memoryDeviceType =
-            translateMemoryTypeToRedfish(*memoryType);
-        // Values like "Unknown" or "Other" will return empty
-        // so just leave off
-        if (!memoryDeviceType.empty())
-        {
-            asyncResp->res.jsonValue[jsonPtr]["MemoryDeviceType"] =
-                memoryDeviceType;
-        }
-        if (memoryType->find("DDR") != std::string::npos)
-        {
-            asyncResp->res.jsonValue[jsonPtr]["MemoryType"] =
-                memory::MemoryType::DRAM;
-        }
-        else if (memoryType->ends_with("Logical"))
-        {
-            asyncResp->res.jsonValue[jsonPtr]["MemoryType"] =
-                memory::MemoryType::IntelOptane;
-        }
+        asyncResp->res.jsonValue[jsonPtr]["MemoryType"] =
+            *memoryType;
+    }
+
+    if (memoryDeviceType != nullptr )
+    {
+           asyncResp->res.jsonValue[jsonPtr]["MemoryDeviceType"] =
+                *memoryDeviceType;
+    }
+
+    if (vendorID != nullptr )
+    {
+            asyncResp->res.jsonValue[jsonPtr]["VendorID"] =
+                *vendorID;
+    }
+
+    if (deviceLocator != nullptr )
+    {
+            asyncResp->res.jsonValue[jsonPtr]["DeviceLocator"] =
+                *deviceLocator;
     }
 
     if (channel != nullptr)
@@ -1004,6 +1014,69 @@ inline void handleMemoryCollectionGet(
                             BMCWEB_REDFISH_SYSTEM_URI_NAME),
         interfaces, "/xyz/openbmc_project/inventory");
 }
+inline void handleMemoryDevicePost(
+    App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& dimmId)
+
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        // Option currently returns no systems.  TBD
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    nlohmann::json dimmPostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
+    InnerMap dimmDataMap;
+    for (auto& [key, value] : dimmPostJsonObject.items())
+    {
+        if (value.is_number_integer())
+        {
+            dimmDataMap[json_util::toUpperCase(key)] = value.get<int64_t>();
+        }
+        else if (value.is_string())
+        {
+            dimmDataMap[json_util::toUpperCase(key)] = value.get<std::string>();
+        }
+        else
+        {
+            BMCWEB_LOG_ERROR("Dimm -Not supported type received from BIOS key = {} and value = {}", key, value);
+        }
+    }
+
+    OuterMap dimmMap;
+    dimmMap[dimmId] = dimmDataMap;
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code ec) {
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR("DIMM - POST D-Bus responses error: {}", ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+            return;
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "SetDimmData", dimmMap);
+
+    asyncResp->res.jsonValue["Status"] = "OK";
+}
 
 inline void requestRoutesMemory(App& app)
 {
@@ -1024,6 +1097,11 @@ inline void requestRoutesMemory(App& app)
         .privileges(redfish::privileges::patchMemory)
         .methods(boost::beast::http::verb::patch)(
             std::bind_front(handleMemoryPatch, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Memory/<str>/")
+        .privileges(redfish::privileges::postMemory)
+        .methods(boost::beast::http::verb::post)(
+            std::bind_front(handleMemoryDevicePost, std::ref(app)));
 }
 
 } // namespace redfish

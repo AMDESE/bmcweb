@@ -609,6 +609,30 @@ static constexpr std::array registry =
             },
             "None.",
         }},
+        MessageEntry{
+            "GeneralHealthManagerError",
+            {
+                "Indicates a general amd-health-mgr error has occurred.",
+                "amd-health-mgr: %1.",
+                "Critical",
+                1,
+                {
+                    "string",
+                },
+                "None.",
+            }},
+        MessageEntry{
+            "GeneralHealthManagerInfo",
+            {
+                "Indicates a general amd-health-mgr informational log",
+                "amd-health-mgr: %1.",
+                "OK",
+                1,
+                {
+                    "string",
+                },
+                "None.",
+            }},
     MessageEntry{
         "IPMIWatchdog",
         {
@@ -2343,6 +2367,16 @@ static constexpr std::array registry =
             "None.",
         }},
     MessageEntry{
+        "AmdAifsFailureMatch",
+        {
+            "Indicates AIFS signature ID match detected",
+            "AIFS signature ID match detected",
+            "Critical",
+            0,
+            {},
+            "None.",
+        }},    
+    MessageEntry{
         "VoltageRegulatorOverheated",
         {
             "Indicates that the specified voltage regulator overheated.",
@@ -2550,7 +2584,9 @@ enum class Index
     systemPowerLost = 188,
     systemPowerOffFailed = 189,
     systemPowerOnFailed = 190,
-    voltageRegulatorOverheated = 191,
+    AmdAifsFailureMatch = 191,
+    voltageRegulatorOverheated = 192,
+
 };
 }; // struct openbmc
 

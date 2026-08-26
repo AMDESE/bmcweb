@@ -7,6 +7,23 @@ option(
                     Video is from the BMCs /dev/videodevice.''',
 )
 
+# BMCWEB_LOCAL_SOCKET
+option(
+    'local-socket',
+    type: 'feature',
+    value: 'enabled',
+    description: '''Enable local socket access for bmcweb. This allows
+                    communication through a Unix domain socket for local
+                    processes.''',
+)
+
+option(
+    'local_socket_path',
+    type: 'string',
+    value: '/tmp/run/local_bmcweb.sock',
+    description: 'Local socket path.',
+)
+
 # BMCWEB_TESTS
 option(
     'tests',

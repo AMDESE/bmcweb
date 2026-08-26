@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: Copyright OpenBMC Authors
 #pragma once
 
+#include "http_request.hpp"
+#include "logging.hpp"
+
 #include <boost/spirit/home/x3/char/char.hpp>
 #include <boost/spirit/home/x3/char/char_class.hpp>
 #include <boost/spirit/home/x3/core/parse.hpp>
@@ -18,8 +21,10 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <ranges>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -201,6 +206,32 @@ inline Encoding getPreferredEncoding(
     }
 
     return Encoding::NoMatch;
+}
+
+inline uint8_t getHostNumberFromUrl(const crow::Request& req)
+{
+    uint8_t hostNumber = 0;
+    boost::urls::url_view urlView = req.url();
+
+    for (const auto& param : urlView.params())
+    {
+        if (param.key == "HostNumber" && !param.value.empty())
+        {
+            try
+            {
+                int temp = std::stoi(std::string(param.value));
+                hostNumber = static_cast<uint8_t>(temp);
+            }
+            catch (const std::exception& e)
+            {
+                BMCWEB_LOG_WARNING("Invalid HostNumber format: {}",
+                                   param.value);
+                hostNumber = 0;
+            }
+            break;
+        }
+    }
+    return hostNumber;
 }
 
 } // namespace http_helpers

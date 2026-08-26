@@ -45,6 +45,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <functional>
 #include <map>
@@ -256,6 +257,15 @@ inline void handleManagerResetToDefaultsAction(
                          resetType.value_or(""));
         messages::actionParameterNotSupported(
             asyncResp->res, resetType.value_or(""), "ResetType");
+        return;
+    }
+
+    /* Reset AMD u-boot variables; factory reset does not wipe that partition. */
+    int systemRet = system("/usr/sbin/fw_setenv -s /etc/uboot_defenv ");
+    if (systemRet == -1)
+    {
+        BMCWEB_LOG_ERROR("Failed to clear u-boot configurations");
+        messages::internalError(asyncResp->res);
         return;
     }
 
@@ -729,7 +739,22 @@ inline void handleManagerGet(
     asyncResp->res.jsonValue["ManagerType"] = manager::ManagerType::BMC;
     asyncResp->res.jsonValue["UUID"] = systemd_utils::getUuid();
     asyncResp->res.jsonValue["ServiceEntryPointUUID"] = uuid;
-    asyncResp->res.jsonValue["Model"] = "OpenBmc"; // TODO(ed), get model
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code& ec,
+                    const std::string& socId) {
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR("Failed to read soc_id from U-Boot env: {}",
+                                 ec);
+                asyncResp->res.jsonValue["Model"] = "OpenBMC";
+                return;
+            }
+            asyncResp->res.jsonValue["Model"] = socId;
+        },
+        "xyz.openbmc_project.U_Boot.Environment.Manager",
+        "/xyz/openbmc_project/u_boot/environment/mgr",
+        "xyz.openbmc_project.U_Boot.Environment.Manager", "Read",
+        std::string("soc_id"));
 
     asyncResp->res.jsonValue["LogServices"]["@odata.id"] =
         boost::urls::format("/redfish/v1/Managers/{}/LogServices", managerId);
