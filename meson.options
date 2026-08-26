@@ -95,6 +95,15 @@ option(
                     are under /redfish/v1/Systems/system/LogServices/Crashdump'.''',
 )
 
+# BMCWEB_REDFISH_RDE
+option(
+    'redfish-rde',
+    type: 'feature',
+    value: 'disabled',
+    description: '''Enable Redfish Device Enablement (RDE) routes for AMD OEM
+                    SocConfiguration and NetworkAdapter resources.''',
+)
+
 # BMCWEB_REDFISH_DUMP_LOG
 option(
     'redfish-dump-log',

@@ -42,6 +42,7 @@
 #include "power_supply.hpp"
 #include "processor.hpp"
 #include "processor_operating_config.hpp"
+#include "rde.hpp"
 #include "redfish_sessions.hpp"
 #include "redfish_v1.hpp"
 #include "roles.hpp"
@@ -249,6 +250,11 @@ RedfishService::RedfishService(App& app)
     requestRoutesMetricReport(app);
     requestRoutesTriggerCollection(app);
     requestRoutesTrigger(app);
+
+    if constexpr (BMCWEB_REDFISH_RDE)
+    {
+        requestRoutesRDEService(app);
+    }
 
     // Note, this must be the last route registered
     requestRoutesRedfish(app);

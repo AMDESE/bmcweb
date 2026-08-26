@@ -36,6 +36,7 @@ feature_options = [
     'redfish-new-powersubsystem-thermalsubsystem',
     'redfish-oem-manager-fan-data',
     'redfish-provisioning-feature',
+    'redfish-rde',
     'redfish-updateservice-use-dbus',
     'redfish-use-hardcoded-system-location-indicator',
     'rest',
