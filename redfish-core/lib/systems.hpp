@@ -2959,13 +2959,15 @@ inline void handleComputerSystemResetActionPost(
     }
 
     std::string resetType;
-    if (!json_util::readJsonAction(req, asyncResp->res, "ResetType", resetType))
+    std::optional<uint8_t> hostNumberOpt;
+    if (!json_util::readJsonAction(req, asyncResp->res, "ResetType", resetType,
+                                   "HostNumber", hostNumberOpt))
     {
         return;
     }
 
     systems_utils::getComputerSystemIndex(
-        asyncResp, systemName,
+        asyncResp, systemName, req, hostNumberOpt,
         std::bind_front(processComputerSystemResetActionPost, asyncResp,
                         resetType));
 }
@@ -3202,7 +3204,7 @@ inline void handleComputerSystemGet(
 
     BMCWEB_LOG_DEBUG("requested system = {}", systemName);
     systems_utils::getComputerSystemIndex(
-        asyncResp, systemName,
+        asyncResp, systemName, req, std::nullopt,
         std::bind_front(processComputerSystemGet, asyncResp, systemName));
 }
 
@@ -3410,7 +3412,7 @@ inline void handleComputerSystemPatch(
     }
 
     systems_utils::getComputerSystemIndex(
-        asyncResp, systemName,
+        asyncResp, systemName, req, std::nullopt,
         std::bind_front(processComputerSystemPatch, asyncResp, systemName,
                         patchParams));
 }
@@ -3574,7 +3576,7 @@ inline void handleSystemCollectionResetActionGet(
 
     // Look to see if system defines AllowedHostTransitions
     systems_utils::getComputerSystemIndex(
-        asyncResp, systemName,
+        asyncResp, systemName, req, std::nullopt,
         std::bind_front(getAllowedHostTransitions, asyncResp));
 }
 

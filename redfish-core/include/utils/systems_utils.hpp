@@ -7,6 +7,8 @@
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
 #include "error_messages.hpp"
+#include "http_request.hpp"
+#include "http_utility.hpp"
 #include "human_sort.hpp"
 #include "logging.hpp"
 
@@ -18,6 +20,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -198,9 +201,22 @@ inline void afterGetComputerSystemSubTreePaths(
  */
 inline void getComputerSystemIndex(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& systemName,
+    const std::string& systemName, const crow::Request& req,
+    const std::optional<uint8_t>& bodyHostNumber,
     std::function<void(const uint64_t computerSystemIndex)>&& callback)
 {
+    // AMD 2x1P keeps a single Systems/system URI and selects the host with
+    // ?HostNumber= (or Reset JSON HostNumber). Community multi-computer-system
+    // looks up HostIndex from inventory instead.
+    const uint8_t hostNumber =
+        bodyHostNumber.value_or(http_helpers::getHostNumberFromUrl(req));
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+        return;
+    }
+
     if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
     {
         constexpr std::array<std::string_view, 1> interfaces{
@@ -212,10 +228,9 @@ inline void getComputerSystemIndex(
     }
     else
     {
-        // on single-host, fallback to index 0
         BMCWEB_LOG_DEBUG(
-            "Single-host detected, fallback to computerSystemIndex 0");
-        callback(0);
+            "Using computerSystemIndex {} from HostNumber", hostNumber);
+        callback(hostNumber);
     }
 }
 
@@ -234,6 +249,11 @@ inline std::string getHostStateServiceName(const uint64_t computerSystemIndex)
     std::string hostStateService = "xyz.openbmc_project.State.Host";
     if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
     {
+        hostStateService += std::to_string(computerSystemIndex);
+    }
+    else if (computerSystemIndex != 0)
+    {
+        // AMD 2x1P: host1/host2 are separate phosphor-state-manager instances.
         hostStateService += std::to_string(computerSystemIndex);
     }
 
@@ -255,6 +275,10 @@ inline std::string getChassisStateServiceName(
 {
     std::string chassisStateService = "xyz.openbmc_project.State.Chassis";
     if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        chassisStateService += std::to_string(computerSystemIndex);
+    }
+    else if (computerSystemIndex != 0)
     {
         chassisStateService += std::to_string(computerSystemIndex);
     }

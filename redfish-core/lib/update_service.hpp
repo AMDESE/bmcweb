@@ -14,6 +14,7 @@
 #include "generated/enums/update_service.hpp"
 #include "http_request.hpp"
 #include "http_response.hpp"
+#include "http_utility.hpp"
 #include "io_context_singleton.hpp"
 #include "logging.hpp"
 #include "multipart_parser.hpp"
@@ -52,6 +53,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -130,9 +132,10 @@ inline void cleanUp()
 }
 
 inline void activateImage(const std::string& objPath,
-                          const std::string& service)
+                          const std::string& service, uint16_t hostNumber)
 {
-    BMCWEB_LOG_DEBUG("Activate image for {} {}", objPath, service);
+    BMCWEB_LOG_DEBUG("Activate image for {} {} host {}", objPath, service,
+                     hostNumber);
     sdbusplus::asio::setProperty(
         *crow::connections::systemBus, service, objPath,
         "xyz.openbmc_project.Software.Activation", "RequestedActivation",
@@ -144,6 +147,71 @@ inline void activateImage(const std::string& objPath,
                 BMCWEB_LOG_DEBUG("error msg = {}", ec.message());
             }
         });
+
+    sdbusplus::asio::setProperty(
+        *crow::connections::systemBus, service, objPath,
+        "xyz.openbmc_project.Software.Activation", "HostNumber", hostNumber,
+        [](const boost::system::error_code& ec) {
+            if (ec)
+            {
+                BMCWEB_LOG_CRITICAL("error_code = {}", ec);
+                BMCWEB_LOG_CRITICAL("error msg = {}", ec.message());
+            }
+        });
+}
+
+inline std::optional<uint16_t> parseBiosTarget(
+    const boost::urls::url_view& urlView)
+{
+    for (const auto& param : urlView.params())
+    {
+        if (param.key == "BiosTarget" && !param.value.empty())
+        {
+            std::string value = std::string(param.value);
+            std::transform(value.begin(), value.end(), value.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::toupper(c));
+                           });
+            if (value == "P0" || value == "P0_LOCAL")
+            {
+                return 0;
+            }
+            if (value == "P1" || value == "P1_REMOTE")
+            {
+                return 2;
+            }
+            if (value == "RP0" || value == "P0_REMOTE")
+            {
+                return 3;
+            }
+            if (value == "LP1" || value == "P1_LOCAL")
+            {
+                return 4;
+            }
+            BMCWEB_LOG_WARNING("Invalid BiosTarget format: {}", param.value);
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<uint16_t> resolveAmdUpdateHost(
+    const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+{
+    uint16_t hostNumber = http_helpers::getHostNumberFromUrl(req);
+    std::optional<uint16_t> biosTarget = parseBiosTarget(req.url());
+    if (biosTarget)
+    {
+        return biosTarget;
+    }
+    if (hostNumber > 2)
+    {
+        messages::actionParameterNotSupported(
+            asyncResp->res, std::to_string(hostNumber), "HostNumber");
+        return std::nullopt;
+    }
+    return hostNumber;
 }
 
 inline bool handleCreateTask(const boost::system::error_code& ec2,
@@ -265,7 +333,7 @@ inline void createTask(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
 // then no asyncResp updates will occur
 inline void softwareInterfaceAdded(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    sdbusplus::message_t& m, task::Payload&& payload)
+    sdbusplus::message_t& m, task::Payload&& payload, uint16_t hostNumber)
 {
     dbus::utility::DBusInterfacesMap interfacesProperties;
 
@@ -285,7 +353,8 @@ inline void softwareInterfaceAdded(
                 "xyz.openbmc_project.Software.Activation"};
             dbus::utility::getDbusObject(
                 objPath.str, interfaces,
-                [objPath, asyncResp, payload(std::move(payload))](
+                [objPath, asyncResp, payload(std::move(payload)),
+                 hostNumber](
                     const boost::system::error_code& ec,
                     const std::vector<
                         std::pair<std::string, std::vector<std::string>>>&
@@ -318,7 +387,7 @@ inline void softwareInterfaceAdded(
                     // is added
                     fwAvailableTimer = nullptr;
 
-                    activateImage(objPath.str, objInfo[0].first);
+                    activateImage(objPath.str, objInfo[0].first, hostNumber);
                     if (asyncResp)
                     {
                         createTask(asyncResp, std::move(payload), objPath);
@@ -463,6 +532,12 @@ inline void monitorForSoftwareAvailable(
         return;
     }
 
+    std::optional<uint16_t> hostNumber = resolveAmdUpdateHost(req, asyncResp);
+    if (!hostNumber)
+    {
+        return;
+    }
+
     fwAvailableTimer =
         std::make_unique<boost::asio::steady_timer>(getIoContext());
 
@@ -472,9 +547,10 @@ inline void monitorForSoftwareAvailable(
         std::bind_front(afterAvailbleTimerAsyncWait, asyncResp));
 
     task::Payload payload(req);
-    auto callback = [asyncResp, payload](sdbusplus::message_t& m) mutable {
+    auto callback = [asyncResp, hostNumber = *hostNumber,
+                     payload](sdbusplus::message_t& m) mutable {
         BMCWEB_LOG_DEBUG("Match fired");
-        softwareInterfaceAdded(asyncResp, m, std::move(payload));
+        softwareInterfaceAdded(asyncResp, m, std::move(payload), hostNumber);
     };
 
     fwUpdateInProgress = true;
@@ -1265,7 +1341,8 @@ inline void getRelatedItems(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
 
 inline void getSoftwareVersionCallback(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& swId, const boost::system::error_code& ec,
+    const std::string& swId, uint16_t hostNumber,
+    const boost::system::error_code& ec,
     const dbus::utility::DBusPropertiesMap& propertiesList)
 {
     if (ec)
@@ -1283,6 +1360,17 @@ inline void getSoftwareVersionCallback(
     {
         messages::internalError(asyncResp->res);
         return;
+    }
+    if (swId == "bios_active")
+    {
+        const std::vector<std::string>* hostVersions = nullptr;
+        sdbusplus::unpackPropertiesNoThrow(dbus_utils::UnpackErrorPrinter(),
+                                           propertiesList, "HostVersions",
+                                           hostVersions);
+        if (hostVersions != nullptr && hostNumber < hostVersions->size())
+        {
+            version = &(*hostVersions)[hostNumber];
+        }
     }
     if (swInvPurpose == nullptr)
     {
@@ -1322,16 +1410,17 @@ inline void getSoftwareVersionCallback(
 inline void getSoftwareVersion(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const std::string& service, const std::string& path,
-    const std::string& swId)
+    const std::string& swId, uint16_t hostNumber)
 {
     dbus::utility::getAllProperties(
         service, path, "xyz.openbmc_project.Software.Version",
-        std::bind_front(getSoftwareVersionCallback, asyncResp, swId));
+        std::bind_front(getSoftwareVersionCallback, asyncResp, swId,
+                        hostNumber));
 }
 
 inline void handleUpdateServiceFirmwareInventoryGetCallback(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::shared_ptr<std::string>& swId,
+    const std::shared_ptr<std::string>& swId, uint16_t hostNumber,
     const boost::system::error_code& ec,
     const dbus::utility::MapperGetSubTreeResponse& subtree)
 {
@@ -1367,7 +1456,8 @@ inline void handleUpdateServiceFirmwareInventoryGetCallback(
         found = true;
         sw_util::getSwStatus(asyncResp, swId, obj.second[0].first);
         sw_util::getSwMinimumVersion(asyncResp, swId, obj.second[0].first);
-        getSoftwareVersion(asyncResp, obj.second[0].first, obj.first, *swId);
+        getSoftwareVersion(asyncResp, obj.second[0].first, obj.first, *swId,
+                           hostNumber);
     }
     if (!found)
     {
@@ -1397,6 +1487,11 @@ inline void handleUpdateServiceFirmwareInventoryGet(
     {
         return;
     }
+    std::optional<uint16_t> hostNumber = resolveAmdUpdateHost(req, asyncResp);
+    if (!hostNumber)
+    {
+        return;
+    }
     std::shared_ptr<std::string> swId = std::make_shared<std::string>(param);
 
     constexpr std::array<std::string_view, 1> interfaces = {
@@ -1404,7 +1499,7 @@ inline void handleUpdateServiceFirmwareInventoryGet(
     dbus::utility::getSubTree(
         "/xyz/openbmc_project/software/", 0, interfaces,
         std::bind_front(handleUpdateServiceFirmwareInventoryGetCallback,
-                        asyncResp, swId));
+                        asyncResp, swId, *hostNumber));
 }
 
 inline void requestRoutesUpdateService(App& app)
