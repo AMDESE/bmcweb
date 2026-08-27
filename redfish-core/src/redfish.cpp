@@ -53,6 +53,7 @@
 #include "storage_controller.hpp"
 #include "switch_port.hpp"
 #include "systems.hpp"
+#include "systems_logservices_amd_ras.hpp"
 #include "systems_logservices_dbus_eventlog.hpp"
 #include "systems_logservices_hostlogger.hpp"
 #include "systems_logservices_journal_eventlog.hpp"
@@ -181,12 +182,23 @@ RedfishService::RedfishService(App& app)
 
     if constexpr (BMCWEB_REDFISH_CPU_LOG)
     {
-        requestRoutesCrashdumpService(app);
-        requestRoutesCrashdumpEntryCollection(app);
-        requestRoutesCrashdumpEntry(app);
-        requestRoutesCrashdumpFile(app);
-        requestRoutesCrashdumpClear(app);
-        requestRoutesCrashdumpCollect(app);
+        // AMD RAS (com.amd.RAS) instead of Intel PECI crashdump.
+        requestRoutesAmdCrashdumpService(app);
+        requestRoutesAmdCrashdumpEntryCollection(app);
+        requestRoutesAmdCrashdumpEntry(app);
+        requestRoutesAmdCrashdumpFile(app);
+        requestRoutesAmdCrashdumpClear(app);
+        requestRoutesAmdCrashdumpCollect(app);
+        requestRoutesCrashdumpConfig(app);
+        requestRoutesPprService(app);
+        requestRoutesPprFile(app);
+        requestRoutesPprStatus(app);
+        requestRoutesPprGetConfig(app);
+        requestRoutesPprSetConfig(app);
+        requestRoutesTraceLogsService(app);
+        requestRoutesTraceLogsEntryCollection(app);
+        requestRoutesTraceLogCollect(app);
+        requestRoutesTraceLogsFile(app);
     }
 
     requestRoutesProcessor(app);

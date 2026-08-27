@@ -926,6 +926,11 @@ inline void handleSystemsLogServiceCollectionGet(
             boost::urls::format("/redfish/v1/Systems/{}/LogServices/Crashdump",
                                 BMCWEB_REDFISH_SYSTEM_URI_NAME);
         logServiceArray.emplace_back(std::move(crashdump));
+        nlohmann::json::object_t tracelogger;
+        tracelogger["@odata.id"] =
+            boost::urls::format("/redfish/v1/Systems/{}/LogServices/TraceLogs",
+                                BMCWEB_REDFISH_SYSTEM_URI_NAME);
+        logServiceArray.emplace_back(std::move(tracelogger));
     }
 
     if constexpr (BMCWEB_REDFISH_HOST_LOGGER)
