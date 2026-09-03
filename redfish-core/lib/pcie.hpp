@@ -6,6 +6,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
@@ -678,6 +679,9 @@ inline void handlePCIeDevicePost(
 
     OuterMap pcieMap;
     pcieMap[pcieDeviceId] = pcieDataMap;
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
@@ -688,7 +692,7 @@ inline void handlePCIeDevicePost(
             }
             messages::success(asyncResp->res);
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetPcieData", pcieMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
