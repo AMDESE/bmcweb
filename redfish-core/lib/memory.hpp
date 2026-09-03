@@ -5,6 +5,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
@@ -883,6 +884,9 @@ inline void handleMemoryDevicePost(
 
     OuterMap dimmMap;
     dimmMap[dimmId] = dimmDataMap;
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
@@ -894,7 +898,7 @@ inline void handleMemoryDevicePost(
             messages::success(asyncResp->res);
             return;
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetDimmData", dimmMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
