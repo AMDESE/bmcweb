@@ -50,6 +50,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -3144,13 +3145,18 @@ static void logTraceLogEntry(
             "/redfish/v1/Systems/{}/LogServices/TraceLogs/Entries/{}",
             BMCWEB_REDFISH_SYSTEM_URI_NAME, logID);
 
-        logEntry["Name"] = "AMD TraceLogs";
+        logEntry["Name"] = "Distributed Trace Buffer TraceLogs";
         logEntry["Id"] = logID;
         logEntry["EntryType"] = "Oem";
         logEntry["AdditionalDataURI"] = std::move(tracelogURI);
         logEntry["DiagnosticDataType"] = "OEM";
         logEntry["Created"] = std::move(timestamp);
-        logEntry["DiagnosticDataTypeString"] = "MpxTraceLogs";
+        std::string oemDiagnosticDataType = logID;
+        std::transform(oemDiagnosticDataType.begin(),
+                       oemDiagnosticDataType.end(),
+                       oemDiagnosticDataType.begin(),
+                       [](unsigned char ch) { return std::toupper(ch); });
+        logEntry["OEMDiagnosticDataType"] = std::move(oemDiagnosticDataType);
 
         if (logEntryJson.is_array())
         {
@@ -4752,7 +4758,7 @@ inline void requestRoutesTraceLogsService(App& app)
             "#LogService.v1_2_0.LogService";
         asyncResp->res.jsonValue["Name"] = "AMD OEM Tracelog Service";
         asyncResp->res.jsonValue["Description"] =
-            "AMD OEM Tracelog service for MPx data";
+            "AMD OEM Tracelog service for DTB data";
         asyncResp->res.jsonValue["Id"] = "Tracelogs";
         asyncResp->res.jsonValue["OverWritePolicy"] = "WrapsWhenFull";
         asyncResp->res.jsonValue["MaxNumberOfRecords"] = 53;
@@ -4774,6 +4780,31 @@ inline void requestRoutesTraceLogsService(App& app)
                                 ["target"] = std::format(
             "/redfish/v1/Systems/{}/LogServices/TraceLogs/Actions/LogService.CollectDiagnosticData",
             BMCWEB_REDFISH_SYSTEM_URI_NAME);
+        asyncResp->res.jsonValue["Actions"]
+                                ["#LogService.CollectDiagnosticData"]
+                                ["DiagnosticDataType@Redfish.AllowableValues"] =
+            nlohmann::json::array_t({"OEM"});
+
+        crow::connections::systemBus->async_method_call(
+            [asyncResp](
+                const boost::system::error_code& getSupportedTypesEc,
+                const std::vector<std::string>& supportedOemDiagnosticDataTypes) {
+                if (getSupportedTypesEc)
+                {
+                    BMCWEB_LOG_ERROR("GetSupportedOemDiagnosticDataTypes failed: {}",
+                                     getSupportedTypesEc.message());
+                    return;
+                }
+
+                asyncResp->res.jsonValue["Actions"]
+                                        ["#LogService.CollectDiagnosticData"]
+                                        ["OEMDiagnosticDataType@Redfish.AllowableValues"] =
+                    supportedOemDiagnosticDataTypes;
+            },
+            "com.amd.Traces",
+            "/com/amd/Traces",
+            "com.amd.Traces.Tbai",
+            "GetSupportedOemDiagnosticDataTypes");
     });
 }
 
@@ -4841,7 +4872,7 @@ inline void requestRoutesTraceLogsEntryCollection(App& app)
             asyncResp->res.jsonValue["@odata.id"] =
                 "/redfish/v1/Systems/system/LogServices/TraceLogs/Entries";
             asyncResp->res.jsonValue["Name"] =
-                "OpenBMC TraceLog Entries";
+                "DTB TraceLog Entries";
             asyncResp->res.jsonValue["Description"] =
                 "Collection of TraceLog Entries";
             asyncResp->res.jsonValue["Members"] =
@@ -4905,18 +4936,67 @@ inline void requestRoutesTraceLogCollect(App& app)
             return;
         }
 
-        // Parse input JSON
         std::optional<std::string> diagnosticDataType;
+        std::optional<std::string> oemDiagnosticDataType;
         if (!redfish::json_util::readJsonAction(
-                req, asyncResp->res,
-                "DiagnosticDataType", diagnosticDataType))
+                req, asyncResp->res, "DiagnosticDataType", diagnosticDataType,
+                "OEMDiagnosticDataType", oemDiagnosticDataType))
         {
-            asyncResp->res.result(boost::beast::http::status::bad_request);
-            asyncResp->res.jsonValue["error"] = "Invalid JSON format";
             return;
         }
 
-        // 🔹 Prepare DBus parameters
+        if (!diagnosticDataType)
+        {
+            messages::actionParameterMissing(
+                asyncResp->res, "CollectDiagnosticData", "DiagnosticDataType");
+            return;
+        }
+
+        if (*diagnosticDataType != "OEM")
+        {
+            messages::actionParameterValueNotInList(
+                asyncResp->res, *diagnosticDataType, "DiagnosticDataType",
+                "CollectDiagnosticData");
+            return;
+        }
+
+        if (!oemDiagnosticDataType)
+        {
+            messages::actionParameterMissing(
+                asyncResp->res, "CollectDiagnosticData",
+                "OEMDiagnosticDataType");
+            return;
+        }
+
+        task::Payload payload(req);
+        std::string requestedOemDiagnosticDataType =
+            std::move(*oemDiagnosticDataType);
+
+        crow::connections::systemBus->async_method_call(
+            [asyncResp, payload = std::move(payload),
+             requestedOemDiagnosticDataType =
+                 std::move(requestedOemDiagnosticDataType)](
+                const boost::system::error_code& getSupportedTypesEc,
+                const std::vector<std::string>& supportedOemDiagnosticDataTypes)
+                mutable {
+                if (getSupportedTypesEc)
+                {
+                    BMCWEB_LOG_ERROR("GetSupportedOemDiagnosticDataTypes failed: {}",
+                                     getSupportedTypesEc.message());
+                    messages::internalError(asyncResp->res);
+                    return;
+                }
+
+                if (std::ranges::find(supportedOemDiagnosticDataTypes,
+                                      requestedOemDiagnosticDataType) ==
+                    supportedOemDiagnosticDataTypes.end())
+                {
+                    messages::actionParameterValueNotInList(
+                        asyncResp->res, requestedOemDiagnosticDataType,
+                        "OEMDiagnosticDataType", "CollectDiagnosticData");
+                    return;
+                }
+
         std::vector<std::pair<std::string,
             std::variant<std::string, uint64_t>>> createDumpParamVec;
 
@@ -4924,12 +5004,9 @@ inline void requestRoutesTraceLogCollect(App& app)
             "xyz.openbmc_project.Dump.Create.CreateParameters.DumpType",
             std::string("UserRequested"));
 
-        if (diagnosticDataType && !diagnosticDataType->empty())
-        {
-            createDumpParamVec.emplace_back(
-                "com.amd.Dump.Create.CreateParameters.MPName",
-                diagnosticDataType.value());
-        }
+        createDumpParamVec.emplace_back(
+            "com.amd.Dump.Create.CreateParameters.MPName",
+            requestedOemDiagnosticDataType);
 
         // Create async task
         std::shared_ptr<task::TaskData> task;
@@ -5012,7 +5089,7 @@ inline void requestRoutesTraceLogCollect(App& app)
         //  Start task
         task->startTimer(std::chrono::minutes(5));
         task->populateResp(asyncResp->res);
-        task->payload.emplace(req);
+        task->payload.emplace(std::move(payload));
         task->state = "Running";
 
         asyncResp->res.jsonValue["TaskID"] =
@@ -5039,6 +5116,11 @@ inline void requestRoutesTraceLogCollect(App& app)
             "xyz.openbmc_project.Dump.Create", // interface
             "CreateDump",                      // method
             createDumpParamVec);
+            },
+            "com.amd.Traces",
+            "/com/amd/Traces",
+            "com.amd.Traces.Tbai",
+            "GetSupportedOemDiagnosticDataTypes");
     });
 }
 
