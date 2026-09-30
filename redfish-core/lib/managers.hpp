@@ -122,6 +122,15 @@ inline std::string getBMCUpdateServicePath()
     return "/xyz/openbmc_project/software";
 }
 
+inline void flushPersistentSessions()
+{
+    persistent_data::SessionStore::getInstance().applySessionTimeouts();
+    if (persistent_data::SessionStore::getInstance().needsWrite())
+    {
+        persistent_data::getConfig().writeData();
+    }
+}
+
 inline void setBMCTransition(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const std::string& transitionValue)
@@ -149,6 +158,9 @@ inline void setBMCTransition(
 inline void doBMCGracefulRestart(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 {
+    // Persist sessions before reboot so web UI login survives BMC reset.
+    flushPersistentSessions();
+
     setBMCTransition(asyncResp,
                      "xyz.openbmc_project.State.BMC.Transition.Reboot");
 }
@@ -156,6 +168,8 @@ inline void doBMCGracefulRestart(
 inline void doBMCForceRestart(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
 {
+    flushPersistentSessions();
+
     setBMCTransition(asyncResp,
                      "xyz.openbmc_project.State.BMC.Transition.HardReboot");
 }

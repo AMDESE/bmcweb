@@ -15,6 +15,8 @@
 #include <boost/beast/http/fields.hpp>
 #include <nlohmann/json.hpp>
 
+#include <unistd.h>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -438,7 +440,17 @@ class ConfigFile
         if (ec)
         {
             BMCWEB_LOG_ERROR("Failed to write file {}", ec.message());
+            return;
         }
+
+        // Ensure session data reaches durable storage before BMC reboot can
+        // tear down the process or reset the platform.
+        if (::fsync(persistentFile.native_handle()) != 0)
+        {
+            BMCWEB_LOG_ERROR("Failed to fsync persistent data");
+            return;
+        }
+        SessionStore::getInstance().clearNeedWrite();
     }
 
     std::string systemUuid;
