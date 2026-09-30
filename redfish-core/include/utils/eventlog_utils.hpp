@@ -8,6 +8,7 @@
 #include "error_messages.hpp"
 #include "event_log.hpp"
 #include "generated/enums/log_service.hpp"
+#include "http_request.hpp"
 #include "http_response.hpp"
 #include "logging.hpp"
 #include "registries.hpp"
@@ -28,12 +29,15 @@
 #include <sdbusplus/message/native_types.hpp>
 #include <sdbusplus/unpack_properties.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -112,6 +116,117 @@ inline std::string getLogEntryDescriptorFromParentCollection(
             break;
     }
     return descriptor;
+}
+
+// USB vNIC host clients may inject EventLog entries. Match integ_sp8:
+// allow 192.168.31.1 and 192.168.31.2 (IPv4 or IPv4-mapped IPv6).
+inline bool isUsbVnicEventLogClient(const crow::Request& req)
+{
+    const std::string ipStr = req.ipAddress.to_string();
+    constexpr std::string_view usbVnic1 = "192.168.31.1";
+    constexpr std::string_view usbVnic2 = "192.168.31.2";
+
+    if (ipStr.find(usbVnic1) == std::string::npos &&
+        ipStr.find(usbVnic2) == std::string::npos)
+    {
+        BMCWEB_LOG_ERROR("Unmatched IP: {} ", ipStr);
+        return false;
+    }
+    return true;
+}
+
+inline std::string loggingSeverityFromPriority(int level)
+{
+    switch (level)
+    {
+        case 0:
+            return "xyz.openbmc_project.Logging.Entry.Level.Emergency";
+        case 1:
+            return "xyz.openbmc_project.Logging.Entry.Level.Alert";
+        case 2:
+            return "xyz.openbmc_project.Logging.Entry.Level.Critical";
+        case 3:
+            return "xyz.openbmc_project.Logging.Entry.Level.Error";
+        case 4:
+            return "xyz.openbmc_project.Logging.Entry.Level.Warning";
+        case 5:
+            return "xyz.openbmc_project.Logging.Entry.Level.Notice";
+        case 6:
+            return "xyz.openbmc_project.Logging.Entry.Level.Informational";
+        case 7:
+            return "xyz.openbmc_project.Logging.Entry.Level.Debug";
+        default:
+            return "Unknown";
+    }
+}
+
+inline bool parseEventLogCreateBody(
+    const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp, std::string& message,
+    std::string& messageId, std::string& messageArgs, std::string& severity,
+    int& severityNumber, std::map<std::string, std::string>& additionalData)
+{
+    nlohmann::json reqDataJson =
+        nlohmann::json::parse(req.body(), nullptr, false);
+    if (!reqDataJson.contains("Message") || !reqDataJson.contains("Severity"))
+    {
+        messages::propertyMissing(asyncResp->res, "Message or Severity");
+        return false;
+    }
+
+    message = reqDataJson.at("Message").get<std::string>();
+    severityNumber = reqDataJson.at("Severity").get<int>();
+    severity = loggingSeverityFromPriority(severityNumber);
+
+    BMCWEB_LOG_DEBUG("event log entry message :{}  and severity {}", message,
+                     severity);
+    if (reqDataJson.contains("AdditionalData"))
+    {
+        if (!reqDataJson["AdditionalData"].is_object())
+        {
+            messages::propertyValueTypeError(asyncResp->res,
+                                             reqDataJson["AdditionalData"],
+                                             "AdditionalData");
+            return false;
+        }
+
+        for (const auto& [key, value] : reqDataJson["AdditionalData"].items())
+        {
+            try
+            {
+                additionalData[key] = value.get<std::string>();
+            }
+            catch (const nlohmann::json::type_error&)
+            {
+                messages::propertyValueTypeError(
+                    asyncResp->res, value, "AdditionalData." + key);
+                return false;
+            }
+        }
+    }
+
+    constexpr const char* ipmiSelMessageId =
+        "b370836ccf2f4850ac5bee185b77893a";
+    auto it = additionalData.find("REDFISH_MESSAGE_ID");
+    if (it != additionalData.end())
+    {
+        messageId = it->second;
+    }
+
+    if (messageId == ipmiSelMessageId)
+    {
+        BMCWEB_LOG_ERROR("IPMI event can not be created");
+        asyncResp->res.result(boost::beast::http::status::not_acceptable);
+        return false;
+    }
+
+    it = additionalData.find("REDFISH_MESSAGE_ARGS");
+    if (it != additionalData.end())
+    {
+        messageArgs = it->second;
+    }
+
+    return true;
 }
 
 inline void handleSystemsAndManagersEventLogServiceGet(
@@ -360,14 +475,10 @@ inline void handleSystemsAndManagersLogServiceEventLogLogEntryCollection(
             LogParseError status = fillEventLogEntryJson(
                 idStr, logEntry, bmcLogEntry, collectionStr, memberId,
                 logEntryDescriptor);
-            if (status == LogParseError::messageIdNotInRegistry)
-            {
-                continue;
-            }
+            // Skip unparseable lines so later events still show.
             if (status != LogParseError::success)
             {
-                messages::internalError(asyncResp->res);
-                return;
+                continue;
             }
 
             entryCount++;
@@ -442,13 +553,11 @@ inline void handleSystemsAndManagersLogServiceEventLogEntriesGet(
                 LogParseError status = fillEventLogEntryJson(
                     idStr, logEntry, bmcLogEntry, collectionStr, memberId,
                     logEntryDescriptor);
-                if (status != LogParseError::success)
+                if (status == LogParseError::success)
                 {
-                    messages::internalError(asyncResp->res);
+                    asyncResp->res.jsonValue.update(bmcLogEntry);
                     return;
                 }
-                asyncResp->res.jsonValue.update(bmcLogEntry);
-                return;
             }
         }
     }
