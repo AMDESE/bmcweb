@@ -24,9 +24,6 @@
 
 namespace redfish
 {
-constexpr std::array<std::string_view, 1> fanInterface = {
-    "xyz.openbmc_project.Inventory.Item.Fan"};
-
 namespace fan_utils
 {
 constexpr std::array<std::string_view, 1> sensorInterface = {
@@ -85,16 +82,14 @@ inline void getFanSensorObjects(
 
 inline void getFanPaths(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& validChassisPath,
+    const std::string& /* validChassisPath */,
     const std::function<void(const dbus::utility::MapperGetSubTreePathsResponse&
                                  fanPaths)>& callback)
 {
-    sdbusplus::object_path endpointPath{validChassisPath};
-    endpointPath /= "cooled_by";
-
-    dbus::utility::getAssociatedSubTreePaths(
-        endpointPath, sdbusplus::object_path("/xyz/openbmc_project/inventory"),
-        0, fanInterface,
+    // Entity Manager on AMD platforms does not expose cooled_by /
+    // Inventory.Item.Fan associations. Enumerate FanSensor objects instead.
+    dbus::utility::getSubTreePaths(
+        "/xyz/openbmc_project/sensors/fan_tach", 0, sensorInterface,
         [asyncResp, callback](
             const boost::system::error_code& ec,
             const dbus::utility::MapperGetSubTreePathsResponse& subtreePaths) {

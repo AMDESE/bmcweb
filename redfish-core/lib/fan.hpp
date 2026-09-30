@@ -153,7 +153,7 @@ inline void handleFanPath(
             continue;
         }
         dbus::utility::getDbusObject(
-            fanPath, fanInterface,
+            fanPath, fan_utils::sensorInterface,
             [fanPath, asyncResp,
              callback](const boost::system::error_code& ec,
                        const dbus::utility::MapperGetObject& object) {
@@ -510,15 +510,14 @@ inline void handleFanPatch(App& app, const crow::Request& req,
 
     if (locationIndicatorActive)
     {
-        dbus::utility::getAssociatedSubTreePathsById(
-            chassisId, "/xyz/openbmc_project/inventory", chassisInterfaces,
-            "cooled_by", fanInterface,
+        fan_utils::getFanPaths(
+            asyncResp, chassisId,
             [asyncResp, chassisId, fanId, locationIndicatorActive](
-                const boost::system::error_code& ec,
                 const dbus::utility::MapperGetSubTreePathsResponse&
                     subtreePaths) {
                 handleSetFanPathById(asyncResp, chassisId, fanId,
-                                     *locationIndicatorActive, ec,
+                                     *locationIndicatorActive,
+                                     boost::system::error_code{},
                                      subtreePaths);
             });
     }
