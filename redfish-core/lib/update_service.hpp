@@ -1456,6 +1456,10 @@ inline void handleUpdateServiceFirmwareInventoryGetCallback(
         found = true;
         sw_util::getSwStatus(asyncResp, swId, obj.second[0].first);
         sw_util::getSwMinimumVersion(asyncResp, swId, obj.second[0].first);
+        if (*swId == "vr_bundle_active")
+        {
+            sw_util::getVRBundleFw(asyncResp, swId, obj.second[0].first);
+        }
         getSoftwareVersion(asyncResp, obj.second[0].first, obj.first, *swId,
                            hostNumber);
     }

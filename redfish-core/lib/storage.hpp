@@ -7,6 +7,7 @@
 
 #include "app.hpp"
 #include "async_resp.hpp"
+#include "dbus_singleton.hpp"
 #include "dbus_utility.hpp"
 #include "error_messages.hpp"
 #include "generated/enums/resource.hpp"
@@ -16,10 +17,12 @@
 #include "registries/privilege_registry.hpp"
 #include "storage_chassis.hpp"
 #include "utils/collection.hpp"
+#include "utils/json_utils.hpp"
 
 #include <boost/beast/http/verb.hpp>
 #include <boost/system/error_code.hpp>
 #include <boost/url/format.hpp>
+#include <nlohmann/json.hpp>
 #include <sdbusplus/message/native_types.hpp>
 #include <sdbusplus/unpack_properties.hpp>
 
@@ -27,13 +30,18 @@
 #include <array>
 #include <format>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace redfish
 {
+using InnerMap = std::map<std::string, std::variant<int64_t, std::string>>;
+using OuterMap = std::map<std::string, InnerMap>;
+
 
 inline void handleSystemsStorageCollectionGet(
     App& app, const crow::Request& req,
@@ -286,6 +294,70 @@ inline void handleSystemsStorageDriveGet(
                         driveId));
 }
 
+inline void handleSystemsStorageDrivePost(
+    App& app, const crow::Request& req,
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& systemName, const std::string& driveId)
+{
+    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+    {
+        return;
+    }
+    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+    {
+        messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                   systemName);
+        return;
+    }
+
+    nlohmann::json drivePostJsonObject =
+        nlohmann::json::parse(req.body(), nullptr, false);
+    InnerMap driveDataMap;
+    for (auto& [key, value] : drivePostJsonObject.items())
+    {
+        if (value.is_number_integer())
+        {
+            driveDataMap[json_util::toUpperCase(key)] = value.get<int64_t>();
+        }
+        else if (value.is_string())
+        {
+            driveDataMap[json_util::toUpperCase(key)] =
+                value.get<std::string>();
+        }
+        else
+        {
+            BMCWEB_LOG_ERROR(
+                "Storage - Not supported type received key = {} value = {}",
+                key, value.dump());
+        }
+    }
+
+    OuterMap driveMap;
+    driveMap[driveId] = driveDataMap;
+    crow::connections::systemBus->async_method_call(
+        [asyncResp](const boost::system::error_code& ec) {
+            if (ec)
+            {
+                BMCWEB_LOG_ERROR("Storage - POST D-Bus response error: {}",
+                                 ec);
+                messages::internalError(asyncResp->res);
+                return;
+            }
+            messages::success(asyncResp->res);
+        },
+        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        "xyz.openbmc_project.PCIe.PcieData", "SetStorageData", driveMap);
+
+    asyncResp->res.jsonValue["Status"] = "OK";
+}
+
 inline void requestRoutesStorage(App& app)
 {
     BMCWEB_ROUTE(app, "/redfish/v1/Storage/")
@@ -312,6 +384,11 @@ inline void requestRoutesStorage(App& app)
         .privileges(redfish::privileges::getDrive)
         .methods(boost::beast::http::verb::get)(
             std::bind_front(handleSystemsStorageDriveGet, std::ref(app)));
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/Storage/1/Drives/<str>/")
+        .privileges(redfish::privileges::postDrive)
+        .methods(boost::beast::http::verb::post)(
+            std::bind_front(handleSystemsStorageDrivePost, std::ref(app)));
 }
 
 } // namespace redfish

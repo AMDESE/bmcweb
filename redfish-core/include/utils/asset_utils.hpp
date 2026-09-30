@@ -35,11 +35,13 @@ inline void extractAssetInfo(
     const std::string* partNumber = nullptr;
     const std::string* serialNumber = nullptr;
     const std::string* sparePartNumber = nullptr;
+    const std::string* revision = nullptr;
 
     const bool success = sdbusplus::unpackPropertiesNoThrow(
         dbus_utils::UnpackErrorPrinter(), assetList, "Manufacturer",
         manufacturer, "Model", model, "PartNumber", partNumber, "SerialNumber",
-        serialNumber, "SparePartNumber", sparePartNumber);
+        serialNumber, "SparePartNumber", sparePartNumber, "Revision",
+        revision);
     if (!success)
     {
         messages::internalError(asyncResp->res);
@@ -63,6 +65,10 @@ inline void extractAssetInfo(
     if (serialNumber != nullptr)
     {
         assetData["SerialNumber"] = *serialNumber;
+    }
+    if (revision != nullptr)
+    {
+        assetData["Revision"] = *revision;
     }
     // SparePartNumber is optional on D-Bus so skip if it is empty
     if (includeSparePartNumber && sparePartNumber != nullptr &&
