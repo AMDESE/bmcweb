@@ -246,18 +246,10 @@ inline sdbusplus::object_path getHostStateObjectPath(
 
 inline std::string getHostStateServiceName(const uint64_t computerSystemIndex)
 {
-    std::string hostStateService = "xyz.openbmc_project.State.Host";
-    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
-    {
-        hostStateService += std::to_string(computerSystemIndex);
-    }
-    else if (computerSystemIndex != 0)
-    {
-        // AMD 2x1P: host1/host2 are separate phosphor-state-manager instances.
-        hostStateService += std::to_string(computerSystemIndex);
-    }
-
-    return hostStateService;
+    // AMD SP7 Host@%i BusName is xyz.openbmc_project.State.Host%i, including
+    // host0 -> Host0. integ ComputerSystem.Reset always appends the index.
+    return "xyz.openbmc_project.State.Host" +
+           std::to_string(computerSystemIndex);
 }
 
 inline sdbusplus::object_path getChassisStateObjectPath(
@@ -273,17 +265,10 @@ inline sdbusplus::object_path getChassisStateObjectPath(
 inline std::string getChassisStateServiceName(
     const uint64_t computerSystemIndex)
 {
-    std::string chassisStateService = "xyz.openbmc_project.State.Chassis";
-    if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
-    {
-        chassisStateService += std::to_string(computerSystemIndex);
-    }
-    else if (computerSystemIndex != 0)
-    {
-        chassisStateService += std::to_string(computerSystemIndex);
-    }
-
-    return chassisStateService;
+    // AMD SP7 Chassis@%i BusName is xyz.openbmc_project.State.Chassis%i,
+    // including chassis0 -> Chassis0. ForceOff uses this name.
+    return "xyz.openbmc_project.State.Chassis" +
+           std::to_string(computerSystemIndex);
 }
 
 inline void afterGetValidSystemsPath(
