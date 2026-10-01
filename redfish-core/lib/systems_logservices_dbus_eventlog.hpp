@@ -311,10 +311,5 @@ inline void requestRoutesSystemsDBusEventLog(App& app)
         .privileges(redfish::privileges::postLogEntry)
         .methods(boost::beast::http::verb::post)(std::bind_front(
             handleSystemsDBusEventLogEntryPost, std::ref(app)));
-
-    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/EventLog")
-        .privileges(redfish::privileges::postLogEntry)
-        .methods(boost::beast::http::verb::post)(std::bind_front(
-            handleSystemsDBusEventLogEntryPost, std::ref(app)));
 }
 } // namespace redfish
