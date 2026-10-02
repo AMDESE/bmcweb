@@ -697,15 +697,23 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
                                 return;
                             }
 
+                            // Already bound to a matching device; ignore
+                            // remaining RDE.Device replies (avoids EID races
+                            // when multiple ASPs are present, e.g. P0 vs P1).
+                            if (!self->deviceUUID.empty())
+                            {
+                                return;
+                            }
+
                             std::string uuid;
+                            uint8_t eid = 0;
                             SchemaResourcesType schemaResources;
 
                             const bool success =
                                 sdbusplus::unpackPropertiesNoThrow(
                                     dbus_utils::UnpackErrorPrinter(),
-                                    properties, "DeviceUUID", uuid, "EID",
-                                    self->deviceEID, "SchemaResources",
-                                    schemaResources);
+                                    properties, "DeviceUUID", uuid, "EID", eid,
+                                    "SchemaResources", schemaResources);
 
                             if (!success)
                             {
@@ -722,11 +730,12 @@ class RDEServiceHandler : public std::enable_shared_from_this<RDEServiceHandler>
                                     "RDE: bootstrapProcess: UUID mismatch: expected");
                                 return;
                             }
-                            // UUID matched — update the active device UUID
+                            // UUID matched — bind UUID and EID together only now
                             self->deviceUUID = uuid;
+                            self->deviceEID = eid;
                             BMCWEB_LOG_INFO(
-                                "RDE: bootstrapProcess: UUID {} matched and updated",
-                                uuid);
+                                "RDE: bootstrapProcess: UUID {} matched EID {} and updated",
+                                uuid, static_cast<int>(eid));
 
                             for (const auto& [rid, valueMap] : schemaResources)
                             {
