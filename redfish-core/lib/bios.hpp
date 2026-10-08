@@ -4,6 +4,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
@@ -254,6 +255,16 @@ inline void handleBiosServiceGet(
 
     asyncResp->res.jsonValue["Attributes"] = nlohmann::json::object();
 
+    // AMD HPAR (2x1P): resolve the host (explicit ?HostNumber -> source vNIC ->
+    // host0) and read that host's CBS. host0 is unchanged for 1P/2P.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec, BiosAttrMap& newtable) {
             if (ec)
@@ -278,18 +289,22 @@ inline void handleBiosServiceGet(
             messages::success(asyncResp->res);
             return;
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "GetBiosAttribute");
 }
 
 inline void setPendingAttributes(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const BiosAttrMap& patchMap)
+    const BiosAttrMap& patchMap, uint8_t hostNumber = 0)
 {
+    // AMD HPAR (2x1P): route to the per-host iodevices-inventory instance.
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
     // now do the get the persistent value
     crow::connections::systemBus->async_method_call(
-        [asyncResp, patchMap](const boost::system::error_code ec,
-                              BiosAttrMap& PendingAttrData) {
+        [asyncResp, patchMap, pcieSvc, pcieObj](
+            const boost::system::error_code ec,
+            BiosAttrMap& PendingAttrData) {
             if (ec)
             {
                 BMCWEB_LOG_ERROR(
@@ -321,12 +336,11 @@ inline void setPendingAttributes(
                     messages::success(asyncResp->res);
                     return;
                 },
-                "xyz.openbmc_project.PCIe",
-                "/xyz/openbmc_project/inventory/PCIe",
+                pcieSvc, pcieObj,
                 "xyz.openbmc_project.PCIe.PcieData", "SetPendingAttribute",
                 PendingAttrData);
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "GetPendingAttribute");
 }
 
@@ -336,8 +350,11 @@ inline void setPendingAttributes(
  **/
 inline void setBiosAttributes(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const BiosAttrMap& table)
+    const BiosAttrMap& table, uint8_t hostNumber = 0)
 {
+    // AMD HPAR (2x1P): route to the per-host iodevices-inventory instance.
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
     // make dbus call transfer the data
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
@@ -352,14 +369,17 @@ inline void setBiosAttributes(
             asyncResp->res.jsonValue["status"] = "ok";
             return;
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetBiosAttribute", table);
 }
 
 inline void setBiosRegistryAttributes(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const BiosRegistryAttrMap& table)
+    const BiosRegistryAttrMap& table, uint8_t hostNumber = 0)
 {
+    // AMD HPAR (2x1P): route to the per-host iodevices-inventory instance.
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
@@ -372,7 +392,7 @@ inline void setBiosRegistryAttributes(
             messages::success(asyncResp->res);
             asyncResp->res.jsonValue["status"] = "ok";
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetBiosRegistryAttribute",
         table);
 }
@@ -416,10 +436,19 @@ inline void handleBiosServicePatch(
         return;
     }
 
+    // AMD HPAR (2x1P): resolve host (explicit ?HostNumber -> vNIC -> host0).
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     // now do the get the persistent value
     crow::connections::systemBus->async_method_call(
-        [asyncResp,
-         patchMap](const boost::system::error_code ec, BiosAttrMap& allData) {
+        [asyncResp, patchMap, hostNumber](const boost::system::error_code ec,
+                                          BiosAttrMap& allData) {
             if (ec)
             {
                 BMCWEB_LOG_DEBUG(
@@ -452,7 +481,7 @@ inline void handleBiosServicePatch(
             if (status)
             {
                 // setBiosAttributes(asyncResp, allData);
-                setPendingAttributes(asyncResp, patchMap);
+                setPendingAttributes(asyncResp, patchMap, hostNumber);
                 messages::success(asyncResp->res);
                 asyncResp->res.jsonValue["status"] = "ok";
             }
@@ -462,7 +491,7 @@ inline void handleBiosServicePatch(
                 asyncResp->res.jsonValue["status"] = "error";
             }
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "GetBiosAttribute");
 }
 
@@ -505,8 +534,11 @@ inline void handleBiosServicePost(
 
     // call function with Param in
     BiosAttrMap table = JsonToBiosAttributes(biosPostJsonObject["Attributes"]);
+    // AMD HPAR (2x1P): BIOS-only write; route by vNIC (explicit ?HostNumber
+    // override allowed), host0 for 1P/2P.
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
     // make dbus call transfer the data
-    setBiosAttributes(asyncResp, table);
+    setBiosAttributes(asyncResp, table, hostNumber);
 }
 
 /**
@@ -548,8 +580,11 @@ inline void handleBiosServicePut(
 
     // call function with Param in
     BiosAttrMap table = JsonToBiosAttributes(biosPostJsonObject["Attributes"]);
+    // AMD HPAR (2x1P): BIOS-only write; route by vNIC (explicit ?HostNumber
+    // override allowed), host0 for 1P/2P.
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
     // make dbus call transfer the data
-    setBiosAttributes(asyncResp, table);
+    setBiosAttributes(asyncResp, table, hostNumber);
 }
 
 inline void requestRoutesBiosService(App& app)
@@ -607,40 +642,10 @@ inline void handleBiosResetPost(
         return;
     }
 
-    std::string hostStr = "0";
-    boost::urls::url_view urlView = req.url();
-
-    // Extract HostNumber from the parameter list
-    for (const auto& param : urlView.params())
-    {
-        if (param.key == "HostNumber" && !param.value.empty())
-            try
-            {
-                hostStr = std::string(param.value);
-            }
-            catch (const std::exception& e)
-            {
-                BMCWEB_LOG_WARNING("Invalid HostNumber format: {}",
-                                   param.value);
-                return;
-            }
-    }
-
-    uint8_t hostNumber = 0;
-    try
-    {
-        hostNumber = static_cast<uint8_t>(std::stoul(hostStr));
-        if (hostNumber > 3)
-        {
-            BMCWEB_LOG_WARNING("HostNumber value is out of range");
-            return;
-        }
-    }
-    catch (std::exception& e)
-    {
-        BMCWEB_LOG_WARNING("Invalid HostNumber format");
-        return;
-    }
+    // AMD HPAR (2x1P): resolve host for the clear-CMOS target. Precedence:
+    // explicit ?HostNumber (back-compat) -> source vNIC (BIOS, no URI change)
+    // -> host0 (1P/2P unchanged).
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
 
     crow::connections::systemBus->async_method_call(
         [asyncResp, hostNumber](const boost::system::error_code& ec) {
@@ -700,6 +705,16 @@ inline void handleBiosSettingsGet(
     asyncResp->res.jsonValue["Id"] = "BIOS";
     asyncResp->res.jsonValue["Name"] = "BIOS Configuration";
     asyncResp->res.jsonValue["Attributes"] = nlohmann::json::object();
+
+    // AMD HPAR (2x1P): resolve host (explicit ?HostNumber -> vNIC -> host0).
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     // now do the get the persistent value
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec,
@@ -727,7 +742,7 @@ inline void handleBiosSettingsGet(
             messages::success(asyncResp->res);
             return;
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "GetPendingAttribute");
 
     return;
@@ -763,6 +778,15 @@ inline void handleBiosAttributeRegistryGet(
         messages::resourceNotFound(asyncResp->res, "ComputerSystem", systemName);
         return;
     }
+
+    // AMD HPAR (2x1P): resolve host (explicit ?HostNumber -> vNIC -> host0).
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
 
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec,
@@ -851,7 +875,7 @@ inline void handleBiosAttributeRegistryGet(
             asyncResp->res.jsonValue = orderedRes;
             messages::success(asyncResp->res);
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "GetBiosRegistryAttribute");
 }
 
@@ -895,7 +919,10 @@ inline void handleBiosAttributeRegistryPut(
         return;
     }
 
-    setBiosRegistryAttributes(asyncResp, table);
+    // AMD HPAR (2x1P): BIOS-only write; route by vNIC (explicit ?HostNumber
+    // override allowed), host0 for 1P/2P.
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    setBiosRegistryAttributes(asyncResp, table, hostNumber);
 }
 
 inline void requestRoutesBiosAttributeRegistry(App& app)

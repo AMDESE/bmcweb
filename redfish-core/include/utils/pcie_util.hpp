@@ -37,16 +37,19 @@ namespace pcie_util
 
 inline void getPCIeDeviceList(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const nlohmann::json::json_pointer& jsonKeyName)
+    const nlohmann::json::json_pointer& jsonKeyName,
+    std::string_view subtreeRoot = "/xyz/openbmc_project/inventory")
 {
     static constexpr std::array<std::string_view, 1> pcieDeviceInterface = {
         "xyz.openbmc_project.Inventory.Item.PCIeDevice"};
     const boost::urls::url pcieDeviceUrl = boost::urls::format(
         "/redfish/v1/Systems/{}/PCIeDevices", BMCWEB_REDFISH_SYSTEM_URI_NAME);
 
-    collection_util::getCollectionToKey(
-        asyncResp, pcieDeviceUrl, pcieDeviceInterface,
-        "/xyz/openbmc_project/inventory", jsonKeyName);
+    // AMD HPAR (2x1P): subtreeRoot scopes the search to the resolved host.
+    // Defaults to the inventory root so 1P/2P behaviour is unchanged.
+    collection_util::getCollectionToKey(asyncResp, pcieDeviceUrl,
+                                        pcieDeviceInterface,
+                                        std::string(subtreeRoot), jsonKeyName);
 }
 
 inline std::optional<pcie_slots::SlotTypes> dbusSlotTypeToRf(

@@ -6,6 +6,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
@@ -102,13 +103,16 @@ inline void getValidPCIeDevicePath(
     const std::string& pcieDeviceId,
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
     const std::function<void(const std::string& pcieDevicePath,
-                             const std::string& service)>& callback)
+                             const std::string& service)>& callback,
+    const std::string& subtreeRoot = "/xyz/openbmc_project/inventory")
 {
     static constexpr std::array<std::string_view, 1> pcieDeviceInterface = {
         "xyz.openbmc_project.Inventory.Item.PCIeDevice"};
 
+    // AMD HPAR (2x1P): subtreeRoot scopes the search to the resolved host.
+    // Defaults to the inventory root so 1P/2P behaviour is unchanged.
     dbus::utility::getSubTreePaths(
-        "/xyz/openbmc_project/inventory", 0, pcieDeviceInterface,
+        subtreeRoot, 0, pcieDeviceInterface,
         [pcieDeviceId, asyncResp,
          callback](const boost::system::error_code& ec,
                    const dbus::utility::MapperGetSubTreePathsResponse&
@@ -148,6 +152,15 @@ inline void handlePCIeDeviceCollectionGet(
         return;
     }
 
+    // AMD HPAR (2x1P): resolve the target host (explicit ?HostNumber ->
+    // source vNIC -> host0) and scope the listing to that host. host0 keeps the
+    // original inventory root, so 1P/2P output is unchanged.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     asyncResp->res.addHeader(boost::beast::http::field::link,
                              "</redfish/v1/JsonSchemas/PCIeDeviceCollection/"
                              "PCIeDeviceCollection.json>; rel=describedby");
@@ -158,8 +171,9 @@ inline void handlePCIeDeviceCollectionGet(
     asyncResp->res.jsonValue["Name"] = "PCIe Device Collection";
     asyncResp->res.jsonValue["Description"] = "Collection of PCIe Devices";
 
-    pcie_util::getPCIeDeviceList(asyncResp,
-                                 nlohmann::json::json_pointer("/Members"));
+    pcie_util::getPCIeDeviceList(
+        asyncResp, nlohmann::json::json_pointer("/Members"),
+        redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 inline void requestRoutesSystemPCIeDeviceCollection(App& app)
@@ -693,9 +707,17 @@ inline void handlePCIeDeviceGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the lookup to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     getValidPCIeDevicePath(
         pcieDeviceId, asyncResp,
-        std::bind_front(afterGetValidPcieDevicePath, asyncResp, pcieDeviceId));
+        std::bind_front(afterGetValidPcieDevicePath, asyncResp, pcieDeviceId),
+        redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 /**
@@ -751,6 +773,13 @@ inline void handlePCIeDevicePost(
 
     OuterMap pcieMap;
     pcieMap[pcieDeviceId] = pcieDataMap;
+
+    // AMD HPAR (2x1P): BIOS-only write; route by source vNIC (explicit
+    // ?HostNumber override allowed), host0 for 1P/2P (unchanged).
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
@@ -761,7 +790,7 @@ inline void handlePCIeDevicePost(
             }
             messages::success(asyncResp->res);
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetPcieData", pcieMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
@@ -835,6 +864,13 @@ inline void handlePCIeFunctionCollectionGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the lookup to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     getValidPCIeDevicePath(
         pcieDeviceId, asyncResp,
         [asyncResp, pcieDeviceId](const std::string& pcieDevicePath,
@@ -857,7 +893,8 @@ inline void handlePCIeFunctionCollectionGet(
                     addPCIeFunctionList(asyncResp->res, pcieDeviceId,
                                         pcieDevProperties);
                 });
-        });
+        },
+        redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 inline void requestRoutesSystemPCIeFunctionCollection(App& app)
@@ -984,6 +1021,13 @@ inline void handlePCIeFunctionGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the lookup to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     getValidPCIeDevicePath(
         pcieDeviceId, asyncResp,
         [asyncResp, pcieDeviceId, pcieFunctionId](
@@ -997,7 +1041,8 @@ inline void handlePCIeFunctionGet(
                     addPCIeFunctionProperties(asyncResp->res, pcieFunctionId,
                                               pcieDevProperties);
                 });
-        });
+        },
+        redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 inline void requestRoutesSystemPCIeFunction(App& app)
