@@ -5,6 +5,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_singleton.hpp"
@@ -59,6 +60,13 @@ inline void handleSystemsStorageCollectionGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the listing to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     asyncResp->res.jsonValue["@odata.type"] =
         "#StorageCollection.StorageCollection";
     asyncResp->res.jsonValue["@odata.id"] = boost::urls::format(
@@ -71,7 +79,7 @@ inline void handleSystemsStorageCollectionGet(
         asyncResp,
         boost::urls::format("/redfish/v1/Systems/{}/Storage",
                             BMCWEB_REDFISH_SYSTEM_URI_NAME),
-        interface, "/xyz/openbmc_project/inventory");
+        interface, redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 inline void handleStorageCollectionGet(
@@ -128,18 +136,22 @@ inline void afterChassisDriveCollectionSubtree(
 
     count = driveArray.size();
 }
-inline void getDrives(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
+inline void getDrives(
+    const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+    const std::string& subtreeRoot = "/xyz/openbmc_project/inventory")
 {
     const std::array<std::string_view, 1> interfaces = {
         "xyz.openbmc_project.Inventory.Item.Drive"};
+    // AMD HPAR (2x1P): subtreeRoot scopes the search to the resolved host.
     dbus::utility::getSubTreePaths(
-        "/xyz/openbmc_project/inventory", 0, interfaces,
+        subtreeRoot, 0, interfaces,
         std::bind_front(afterChassisDriveCollectionSubtree, asyncResp));
 }
 
 inline void afterSystemsStorageGetSubtree(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& storageId, const boost::system::error_code& ec,
+    const std::string& storageId, const std::string& subtreeRoot,
+    const boost::system::error_code& ec,
     const dbus::utility::MapperGetSubTreeResponse& subtree)
 {
     if (ec)
@@ -170,7 +182,7 @@ inline void afterSystemsStorageGetSubtree(
     asyncResp->res.jsonValue["Id"] = storageId;
     asyncResp->res.jsonValue["Status"]["State"] = resource::State::Enabled;
 
-    getDrives(asyncResp);
+    getDrives(asyncResp, subtreeRoot);
     asyncResp->res.jsonValue["Controllers"]["@odata.id"] =
         boost::urls::format("/redfish/v1/Systems/{}/Storage/{}/Controllers",
                             BMCWEB_REDFISH_SYSTEM_URI_NAME, storageId);
@@ -193,11 +205,20 @@ inline void handleSystemsStorageGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the lookup (and its drive listing) to the host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+    std::string subtreeRoot = redfish::amd_hpar::hostInventoryRoot(hostNumber);
+
     constexpr std::array<std::string_view, 1> interfaces = {
         "xyz.openbmc_project.Inventory.Item.Storage"};
     dbus::utility::getSubTree(
-        "/xyz/openbmc_project/inventory", 0, interfaces,
-        std::bind_front(afterSystemsStorageGetSubtree, asyncResp, storageId));
+        subtreeRoot, 0, interfaces,
+        std::bind_front(afterSystemsStorageGetSubtree, asyncResp, storageId,
+                        subtreeRoot));
 }
 
 inline void afterSubtree(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
@@ -286,10 +307,17 @@ inline void handleSystemsStorageDriveGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the lookup to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     constexpr std::array<std::string_view, 1> interfaces = {
         "xyz.openbmc_project.Inventory.Item.Drive"};
     dbus::utility::getSubTree(
-        "/xyz/openbmc_project/inventory", 0, interfaces,
+        redfish::amd_hpar::hostInventoryRoot(hostNumber), 0, interfaces,
         std::bind_front(afterGetSubtreeSystemsStorageDrive, asyncResp,
                         driveId));
 }
@@ -341,6 +369,13 @@ inline void handleSystemsStorageDrivePost(
 
     OuterMap driveMap;
     driveMap[driveId] = driveDataMap;
+
+    // AMD HPAR (2x1P): BIOS-only write; route by source vNIC (explicit
+    // ?HostNumber override allowed), host0 for 1P/2P (unchanged).
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code& ec) {
             if (ec)
@@ -352,7 +387,7 @@ inline void handleSystemsStorageDrivePost(
             }
             messages::success(asyncResp->res);
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetStorageData", driveMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
