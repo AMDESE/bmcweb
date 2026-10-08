@@ -5,6 +5,7 @@
 
 #include "bmcweb_config.h"
 
+#include "amd_host_inventory.hpp"
 #include "app.hpp"
 #include "async_resp.hpp"
 #include "dbus_utility.hpp"
@@ -829,15 +830,18 @@ inline void afterGetDimmData(
 }
 
 inline void getDimmData(const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-                        const std::string& dimmId)
+                        const std::string& dimmId,
+                        const std::string& subtreeRoot =
+                            "/xyz/openbmc_project/inventory")
 {
     BMCWEB_LOG_DEBUG("Get dimm path for {}", dimmId);
     constexpr std::array<std::string_view, 2> interfaces = {
         "xyz.openbmc_project.Inventory.Item.Dimm",
         "xyz.openbmc_project.Inventory.Item.PersistentMemory.Partition"};
 
+    // AMD HPAR (2x1P): subtreeRoot scopes the search to the resolved host.
     dbus::utility::getSubTree(
-        "/xyz/openbmc_project/inventory", 0, interfaces,
+        subtreeRoot, 0, interfaces,
         [asyncResp,
          dimmId](const boost::system::error_code& ec,
                  const dbus::utility::MapperGetSubTreeResponse& subtree) {
@@ -974,7 +978,15 @@ inline void handleMemoryGet(App& app, const crow::Request& req,
         return;
     }
 
-    getDimmData(asyncResp, dimmId);
+    // AMD HPAR (2x1P): scope the lookup to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
+    getDimmData(asyncResp, dimmId,
+                redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 
 inline void handleMemoryCollectionGet(
@@ -1000,6 +1012,13 @@ inline void handleMemoryCollectionGet(
         return;
     }
 
+    // AMD HPAR (2x1P): scope the listing to the resolved host.
+    uint8_t hostNumber = 0;
+    if (!redfish::amd_hpar::resolveReadHost(req, asyncResp, hostNumber))
+    {
+        return;
+    }
+
     asyncResp->res.jsonValue["@odata.type"] =
         "#MemoryCollection.MemoryCollection";
     asyncResp->res.jsonValue["Name"] = "Memory Module Collection";
@@ -1012,7 +1031,7 @@ inline void handleMemoryCollectionGet(
         asyncResp,
         boost::urls::format("/redfish/v1/Systems/{}/Memory",
                             BMCWEB_REDFISH_SYSTEM_URI_NAME),
-        interfaces, "/xyz/openbmc_project/inventory");
+        interfaces, redfish::amd_hpar::hostInventoryRoot(hostNumber));
 }
 inline void handleMemoryDevicePost(
     App& app, const crow::Request& req,
@@ -1061,6 +1080,13 @@ inline void handleMemoryDevicePost(
 
     OuterMap dimmMap;
     dimmMap[dimmId] = dimmDataMap;
+
+    // AMD HPAR (2x1P): BIOS-only write; route by source vNIC (explicit
+    // ?HostNumber override allowed), host0 for 1P/2P (unchanged).
+    uint8_t hostNumber = redfish::amd_hpar::hostNumberFromReq(req);
+    std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
+    std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
+
     crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
@@ -1072,7 +1098,7 @@ inline void handleMemoryDevicePost(
             messages::success(asyncResp->res);
             return;
         },
-        "xyz.openbmc_project.PCIe", "/xyz/openbmc_project/inventory/PCIe",
+        pcieSvc, pcieObj,
         "xyz.openbmc_project.PCIe.PcieData", "SetDimmData", dimmMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
