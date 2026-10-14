@@ -31,9 +31,13 @@ namespace event_log
 bool getUniqueEntryID(UniqueEntryIDState& state, const std::string& logEntry,
                       std::string& entryID)
 {
+    // Extract the timestamp up to the first space for such entries
+    // 2026-10-14T03:21:09.936292+00:00 OpenBMC.0.1.ServiceFailure,phosphor-pid-control.service
+    std::string entryDate = logEntry.substr(0, logEntry.find(' '));
+
     // Get the entry timestamp
     std::optional<time_utils::usSinceEpoch> curTs =
-        time_utils::dateStringToEpoch(logEntry);
+        time_utils::dateStringToEpoch(entryDate);
     if (!curTs)
     {
         return false;
