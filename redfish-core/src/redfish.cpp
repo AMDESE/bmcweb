@@ -156,6 +156,7 @@ RedfishService::RedfishService(App& app)
         requestRoutesCrashdumpConfig(app);
         requestRoutesTraceLogCollect(app);
         requestRoutesTraceLogsService(app);
+        requestRoutesTraceLogsConfig(app);
         requestRoutesTraceLogsEntryCollection(app);
         requestRoutesTraceLogsFile(app);
     }

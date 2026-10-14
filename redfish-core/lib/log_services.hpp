@@ -4784,6 +4784,12 @@ inline void requestRoutesTraceLogsService(App& app)
                                 ["#LogService.CollectDiagnosticData"]
                                 ["DiagnosticDataType@Redfish.AllowableValues"] =
             nlohmann::json::array_t({"OEM"});
+        asyncResp->res.jsonValue["Oem"]["AMD"]["@odata.type"] =
+            "#AMD_Instinct_LogService.v1_0_0.AMD_Instinct_LogService";
+        asyncResp->res.jsonValue["Oem"]["AMD"]["Configuration"]["@odata.id"] =
+            std::format(
+            "/redfish/v1/Systems/{}/LogServices/TraceLogs/Oem/AMD/Configuration",
+            BMCWEB_REDFISH_SYSTEM_URI_NAME);
 
         crow::connections::systemBus->async_method_call(
             [asyncResp](
@@ -4805,6 +4811,229 @@ inline void requestRoutesTraceLogsService(App& app)
             "/com/amd/Traces",
             "com.amd.Traces.Tbai",
             "GetSupportedOemDiagnosticDataTypes");
+    });
+}
+
+inline void requestRoutesTraceLogsConfig(App& app)
+{
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/TraceLogs/"
+                      "Oem/AMD/Configuration")
+        .privileges({{"ConfigureComponents"}})
+        .methods(boost::beast::http::verb::get)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& systemName) {
+        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+        {
+            return;
+        }
+        if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+        {
+            messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                       systemName);
+            return;
+        }
+        if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+        {
+            messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                       systemName);
+            return;
+        }
+
+        asyncResp->res.jsonValue["@odata.type"] =
+            "#LogService.v1_2_0.LogService";
+        asyncResp->res.jsonValue["@odata.id"] = std::format(
+            "/redfish/v1/Systems/{}/LogServices/TraceLogs/Oem/AMD/Configuration",
+            BMCWEB_REDFISH_SYSTEM_URI_NAME);
+        asyncResp->res.jsonValue["Id"] = "Configuration";
+
+        crow::connections::systemBus->async_method_call(
+            [asyncResp](const boost::system::error_code& ec,
+                        uint8_t socketCount,
+                        const std::vector<std::string>& soc0MPList,
+                        const std::vector<std::string>& soc1MPList,
+                        const std::vector<std::string>& soc2MPList,
+                        const std::vector<std::string>& soc3MPList) {
+                if (ec)
+                {
+                    BMCWEB_LOG_ERROR("GetMPConfig failed: {}", ec.message());
+                    messages::internalError(asyncResp->res);
+                    return;
+                }
+
+                const std::array<const std::vector<std::string>*, 4> lists = {
+                    &soc0MPList, &soc1MPList, &soc2MPList, &soc3MPList};
+                const std::array<const char*, 4> keys = {
+                    "Soc0MPList", "Soc1MPList", "Soc2MPList", "Soc3MPList"};
+                for (size_t index = 0; index < lists.size(); ++index)
+                {
+                    if (index < socketCount)
+                    {
+                        asyncResp->res.jsonValue[keys[index]] = *lists[index];
+                    }
+                }
+            },
+            "com.amd.Traces", "/com/amd/Traces", "com.amd.Traces.Tbai",
+            "GetMPConfig");
+    });
+
+    BMCWEB_ROUTE(app, "/redfish/v1/Systems/<str>/LogServices/TraceLogs/"
+                      "Oem/AMD/Configuration")
+        .privileges({{"ConfigureComponents"}})
+        .methods(boost::beast::http::verb::patch)(
+            [&app](const crow::Request& req,
+                   const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+                   const std::string& systemName) {
+        if (!redfish::setUpRedfishRoute(app, req, asyncResp))
+        {
+            return;
+        }
+        if constexpr (BMCWEB_EXPERIMENTAL_REDFISH_MULTI_COMPUTER_SYSTEM)
+        {
+            messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                       systemName);
+            return;
+        }
+        if (systemName != BMCWEB_REDFISH_SYSTEM_URI_NAME)
+        {
+            messages::resourceNotFound(asyncResp->res, "ComputerSystem",
+                                       systemName);
+            return;
+        }
+
+        std::optional<std::vector<std::string>> soc0MPList;
+        std::optional<std::vector<std::string>> soc1MPList;
+        std::optional<std::vector<std::string>> soc2MPList;
+        std::optional<std::vector<std::string>> soc3MPList;
+        if (!redfish::json_util::readJsonPatch(
+                req, asyncResp->res, "Soc0MPList", soc0MPList, "Soc1MPList",
+                soc1MPList, "Soc2MPList", soc2MPList, "Soc3MPList",
+                soc3MPList))
+        {
+            return;
+        }
+        if (!soc0MPList && !soc1MPList && !soc2MPList && !soc3MPList)
+        {
+            messages::propertyMissing(asyncResp->res, "Soc0MPList");
+            return;
+        }
+
+        crow::connections::systemBus->async_method_call(
+            [asyncResp, soc0MPList, soc1MPList, soc2MPList,
+             soc3MPList](const boost::system::error_code& ec,
+                         uint8_t socketCount, const std::vector<std::string>&,
+                         const std::vector<std::string>&,
+                         const std::vector<std::string>&,
+                         const std::vector<std::string>&) {
+                if (ec)
+                {
+                    BMCWEB_LOG_ERROR("GetMPConfig failed: {}", ec.message());
+                    messages::internalError(asyncResp->res);
+                    return;
+                }
+
+                std::string_view rejected;
+                if (soc0MPList && socketCount < 1)
+                {
+                    rejected = "Soc0MPList";
+                }
+                else if (soc1MPList && socketCount < 2)
+                {
+                    rejected = "Soc1MPList";
+                }
+                else if (soc2MPList && socketCount < 3)
+                {
+                    rejected = "Soc2MPList";
+                }
+                else if (soc3MPList && socketCount < 4)
+                {
+                    rejected = "Soc3MPList";
+                }
+                if (!rejected.empty())
+                {
+                    messages::propertyUnknown(asyncResp->res, rejected);
+                    return;
+                }
+
+                const std::array<std::optional<std::vector<std::string>>, 4>
+                    requested = {soc0MPList, soc1MPList, soc2MPList,
+                                 soc3MPList};
+                // The body is the complete configuration. Every detected
+                // socket omitted from the request is disabled.
+                struct SocketUpdate
+                {
+                    uint8_t socket = 0;
+                    std::vector<std::string> names;
+                };
+                struct UpdateState
+                {
+                    std::shared_ptr<bmcweb::AsyncResp> asyncResp;
+                    std::vector<SocketUpdate> updates;
+                    size_t index = 0;
+                };
+                auto state = std::make_shared<UpdateState>();
+                state->asyncResp = asyncResp;
+                for (uint8_t socket = 0;
+                     socket < requested.size() && socket < socketCount;
+                     ++socket)
+                {
+                    if (requested[socket])
+                    {
+                        state->updates.push_back(
+                            SocketUpdate{socket, *requested[socket]});
+                    }
+                    else
+                    {
+                        state->updates.push_back(SocketUpdate{socket, {}});
+                    }
+                }
+
+                auto applyNext = std::make_shared<std::function<void()>>();
+                *applyNext = [state, applyNext]() {
+                    if (state->index >= state->updates.size())
+                    {
+                        messages::success(state->asyncResp->res);
+                        // AsyncResp sends the HTTP response from its
+                        // destructor. Release it before this chain is dropped.
+                        state->asyncResp.reset();
+                        return;
+                    }
+                    const uint8_t socket = state->updates[state->index].socket;
+                    const std::vector<std::string> names =
+                        state->updates[state->index].names;
+                    ++state->index;
+                    crow::connections::systemBus->async_method_call(
+                        [state, applyNext](
+                            const boost::system::error_code& updateEc,
+                            uint8_t status) {
+                            if (updateEc || status != 0)
+                            {
+                                BMCWEB_LOG_ERROR(
+                                    "UpdateMPConfig failed: {} status {}",
+                                    updateEc.message(), status);
+                                messages::internalError(state->asyncResp->res);
+                                state->asyncResp.reset();
+                                *applyNext = nullptr;
+                                return;
+                            }
+                            (*applyNext)();
+                            if (!state->asyncResp)
+                            {
+                                *applyNext = nullptr;
+                            }
+                        },
+                        "com.amd.Traces", "/com/amd/Traces",
+                        "com.amd.Traces.Tbai", "UpdateMPConfig", socket,
+                        names);
+                };
+                (*applyNext)();
+                if (!state->asyncResp)
+                {
+                    *applyNext = nullptr;
+                }
+            },
+            "com.amd.Traces", "/com/amd/Traces", "com.amd.Traces.Tbai",
+            "GetMPConfig");
     });
 }
 
