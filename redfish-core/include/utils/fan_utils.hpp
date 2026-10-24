@@ -82,7 +82,7 @@ inline void getFanSensorObjects(
 
 inline void getFanPaths(
     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
-    const std::string& /* validChassisPath */,
+    const std::string& validChassisPath,
     const std::function<void(const dbus::utility::MapperGetSubTreePathsResponse&
                                  fanPaths)>& callback)
 {
@@ -90,7 +90,7 @@ inline void getFanPaths(
     // Inventory.Item.Fan associations. Enumerate FanSensor objects instead.
     dbus::utility::getSubTreePaths(
         "/xyz/openbmc_project/sensors/fan_tach", 0, sensorInterface,
-        [asyncResp, callback](
+        [asyncResp, validChassisPath, callback](
             const boost::system::error_code& ec,
             const dbus::utility::MapperGetSubTreePathsResponse& subtreePaths) {
             if (ec)
@@ -103,7 +103,53 @@ inline void getFanPaths(
                 }
                 return;
             }
-            callback(subtreePaths);
+
+            // Type matching a(sss) -> tuple<Forward, Reverse, Endpoint>
+            using AssociationDefinition = std::tuple<std::string, std::string, std::string>;
+            auto filteredSubtreePaths = std::make_shared<dbus::utility::MapperGetSubTreePathsResponse>();
+            auto outstandingCalls = std::make_shared<size_t>(subtreePaths.size());
+
+            for (const std::string& p : subtreePaths)
+            {
+                dbus::utility::getProperty<std::vector<AssociationDefinition>>(
+                    "xyz.openbmc_project.FanSensor", p,
+                    "xyz.openbmc_project.Association.Definitions", "Associations",
+                    [asyncResp, p, validChassisPath, outstandingCalls, filteredSubtreePaths, callback](
+                        const boost::system::error_code& ec2,
+                        const std::vector<AssociationDefinition>& associations) {
+
+                        auto checkCompletion = [outstandingCalls, filteredSubtreePaths, callback]() {
+                            (*outstandingCalls)--;
+                            if (*outstandingCalls == 0)
+                            {
+                                callback(*filteredSubtreePaths);
+                            }
+                        };
+
+                        if (ec2)
+                        {
+                            if (ec2.value() != boost::system::errc::io_error && ec2.value() != EBADR)
+                            {
+                                BMCWEB_LOG_ERROR("DBUS response error {}", ec2);
+                                messages::internalError(asyncResp->res);
+                            }
+                            checkCompletion();
+                            return;
+                        }
+
+
+                        // Structured binding works perfectly fine with std::tuple
+                        for (const auto& [forward, reverse, endpoint] : associations)
+                        {
+                            if (endpoint == validChassisPath)
+                            {
+                                filteredSubtreePaths->push_back(p);
+                                break;
+                            }
+                        }
+                        checkCompletion();
+                });
+            }
         });
 }
 
