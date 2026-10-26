@@ -212,10 +212,6 @@ inline void getCpuDataByInterface(
                         .jsonValue["ProcessorId"]["IdentificationRegisters"] =
                         std::format("{:#016x}", *value);
                 }
-                else
-                {
-                    messages::propertyNotUpdated(asyncResp->res, "PPIN");
-                }
             }
             else if (property.first == "Microcode")
             {
@@ -413,10 +409,6 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
             {
                 asyncResp->res.jsonValue["SerialNumber"] = *serialNumber;
             }
-            else
-            {
-                messages::propertyNotUpdated(asyncResp->res, "SerialNumber");
-            }
 
             if ((model != nullptr) && !model->empty())
             {
@@ -448,10 +440,6 @@ inline void getCpuAssetData(std::shared_ptr<bmcweb::AsyncResp> asyncResp,
             if (partNumber != nullptr && !partNumber->empty())
             {
                 asyncResp->res.jsonValue["PartNumber"] = *partNumber;
-            }
-            else
-            {
-                messages::propertyNotUpdated(asyncResp->res, "PartNumber");
             }
 
             if (sparePartNumber != nullptr && !sparePartNumber->empty())
