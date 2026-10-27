@@ -1087,16 +1087,7 @@ inline void handleMemoryDevicePost(
     std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
     std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
 
-    // Reported issue: DIMM/Memory data is reported inconsistently across
-    // reboots (sometimes all, some, or no DIMMs). The iodevices inventory
-    // service (xyz.openbmc_project.PCIe) is single-threaded and processes each
-    // BIOS inventory POST synchronously. On a cold boot BIOS pushes a burst
-    // (many PCIe + Storage + DIMM) almost at once; the DIMM SetDimmData call can
-    // land behind the PCIe calls in the serialized queue and not get a reply
-    // within the default 25s D-Bus timeout, which drops the DIMM data. Use a
-    // generous timeout so the late call still completes.
-    constexpr uint64_t kInventoryPostTimeoutUs = 90ULL * 1000000ULL;
-    crow::connections::systemBus->async_method_call_timed(
+    crow::connections::systemBus->async_method_call(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
             {
@@ -1108,8 +1099,7 @@ inline void handleMemoryDevicePost(
             return;
         },
         pcieSvc, pcieObj,
-        "xyz.openbmc_project.PCIe.PcieData", "SetDimmData",
-        kInventoryPostTimeoutUs, dimmMap);
+        "xyz.openbmc_project.PCIe.PcieData", "SetDimmData", dimmMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
 }
