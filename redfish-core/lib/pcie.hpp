@@ -780,7 +780,13 @@ inline void handlePCIeDevicePost(
     std::string pcieSvc = redfish::amd_hpar::pcieDataService(hostNumber);
     std::string pcieObj = redfish::amd_hpar::pcieDataObject(hostNumber);
 
-    crow::connections::systemBus->async_method_call(
+    // Reported issue: inventory data is reported inconsistently across reboots.
+    // iodevices (xyz.openbmc_project.PCIe) is single-threaded and processes
+    // inventory POSTs serially; a cold-boot burst can delay this call past the
+    // default 25s D-Bus timeout. Use a generous timeout so bursts of
+    // PCIe/Storage/DIMM POSTs do not time out and silently drop data.
+    constexpr uint64_t kInventoryPostTimeoutUs = 90ULL * 1000000ULL;
+    crow::connections::systemBus->async_method_call_timed(
         [asyncResp](const boost::system::error_code ec) {
             if (ec)
             {
@@ -791,7 +797,8 @@ inline void handlePCIeDevicePost(
             messages::success(asyncResp->res);
         },
         pcieSvc, pcieObj,
-        "xyz.openbmc_project.PCIe.PcieData", "SetPcieData", pcieMap);
+        "xyz.openbmc_project.PCIe.PcieData", "SetPcieData",
+        kInventoryPostTimeoutUs, pcieMap);
 
     asyncResp->res.jsonValue["Status"] = "OK";
 }
