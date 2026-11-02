@@ -196,6 +196,7 @@ RedfishService::RedfishService(App& app)
         requestRoutesPprGetConfig(app);
         requestRoutesPprSetConfig(app);
         requestRoutesTraceLogsService(app);
+        requestRoutesTraceLogsConfig(app);
         requestRoutesTraceLogsEntryCollection(app);
         requestRoutesTraceLogCollect(app);
         requestRoutesTraceLogsFile(app);
