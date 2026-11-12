@@ -24,6 +24,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast/http/status.hpp>
 #include <boost/beast/http/verb.hpp>
+#include <boost/url/url_view.hpp>
 #include <nlohmann/json.hpp>
 #include <sdbusplus/asio/property.hpp>
 #include <sdbusplus/message.hpp>
@@ -97,6 +98,14 @@ constexpr const char* rdeEncodingFormatJSON =
 constexpr const char* rdeSignalMember = "TaskUpdated";
 constexpr uint16_t completionCodeOperationCompleted = 7;
 constexpr uint16_t completionCodeOperationFailed = 8;
+// PATCH cached by pldmd and replayed on the next host boot
+constexpr uint16_t completionCodeOperationQueued = 5;
+constexpr uint16_t completionCodeOperationExecuting = 6;
+constexpr uint16_t completionCodeOperationCancelled = 9;
+constexpr uint16_t completionCodeOperationTimedOut = 10;
+constexpr int rdeQueuedTaskTimeoutHours = 24;
+constexpr const char* rdeHostResetActionUri =
+    "/redfish/v1/Systems/system/Actions/ComputerSystem.Reset";
 const std::string operationIdFile = "/var/run/rde-operation-id";
 constexpr int rdeTaskTimeoutMinutes = 5;
 
@@ -245,9 +254,9 @@ inline bool rdeProcessTaskUpdateSignal(
 {
     if (ec2)
     {
-        BMCWEB_LOG_ERROR("RDE: Signal error - {}", ec2.message());
-        taskData->messages.emplace_back(messages::internalError());
-        taskData->state = "Exception";
+        // Task timer expired; state and TaskAborted are already set
+        BMCWEB_LOG_ERROR("RDE: No final task update - {}", ec2.message());
+        taskData->messages.emplace_back(messages::operationTimeout());
         return task::completed;
     }
 
@@ -289,11 +298,60 @@ inline bool rdeProcessTaskUpdateSignal(
     }
     const auto& uriMapJson = jsonBody["uriMap"];
 
+    if (*rc == completionCodeOperationQueued)
+    {
+        // Pending until the replay on the next host boot reports the result
+        if (taskData->state != "Pending")
+        {
+            BMCWEB_LOG_INFO(
+                "RDE: PATCH queued until next host boot, Task Id={}, return_code={}",
+                taskData->index, *rc);
+            taskData->state = "Pending";
+            taskData->messages.emplace_back(messages::resetRequired(
+                boost::urls::url_view(rdeHostResetActionUri), "ForceRestart"));
+            taskData->extendTimer(
+                std::chrono::hours(rdeQueuedTaskTimeoutHours));
+        }
+        return !task::completed;
+    }
+
+    if (*rc == completionCodeOperationExecuting)
+    {
+        if (taskData->state != "Running")
+        {
+            BMCWEB_LOG_INFO("RDE: PATCH running on device, Task Id={}",
+                            taskData->index);
+            taskData->state = "Running";
+        }
+        return !task::completed;
+    }
+
+    if (*rc == completionCodeOperationCancelled)
+    {
+        BMCWEB_LOG_ERROR("RDE: PATCH abandoned by the device, return_code={}",
+                         *rc);
+        taskData->messages.emplace_back(
+            messages::taskAborted(std::to_string(taskData->index)));
+        taskData->state = "Cancelled";
+        taskData->status = "Warning";
+        return task::completed;
+    }
+
+    if (*rc == completionCodeOperationTimedOut)
+    {
+        BMCWEB_LOG_ERROR("RDE: PATCH timed out, return_code={}", *rc);
+        taskData->messages.emplace_back(messages::operationTimeout());
+        taskData->state = "Exception";
+        taskData->status = "Warning";
+        return task::completed;
+    }
+
     if (*rc == completionCodeOperationFailed)
     {
         BMCWEB_LOG_ERROR("RDE: PATCH apply failed, return_code={}", *rc);
-        taskData->messages.emplace_back(messages::internalError());
+        taskData->messages.emplace_back(messages::operationFailed());
         taskData->state = "Exception";
+        taskData->status = "Critical";
         return task::completed;
     }
 
