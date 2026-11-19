@@ -1414,7 +1414,7 @@ inline void requestRoutesAmdCrashdumpCollect(App& app)
 inline void requestRoutesPprService(App& app)
 {
     BMCWEB_ROUTE(app,
-                 "/redfish/v1/Systems/<str>/LogServices/PostPackageRepair/")
+                 "/redfish/v1/Systems/<str>/LogServices/Oem/AMD.PostPackageRepair/")
         .privileges({{"ConfigureManager"}})
         .methods(
             boost::beast::http::verb::
@@ -1439,14 +1439,14 @@ inline void requestRoutesPprService(App& app)
             }
 
             asyncResp->res.jsonValue["@odata.id"] = std::format(
-                "/redfish/v1/Systems/{}/LogServices/PostPackageRepair",
+                "/redfish/v1/Systems/{}/LogServices/Oem/AMD.PostPackageRepair",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME);
             asyncResp->res.jsonValue["@odata.type"] =
                 "#LogService.v1_2_0.LogService";
             asyncResp->res.jsonValue["Name"] = "Open BMC Oem PPR Service";
             asyncResp->res.jsonValue["Description"] =
                 "Oem Post Package Repair Service";
-            asyncResp->res.jsonValue["Id"] = "ppr";
+            asyncResp->res.jsonValue["Id"] = "AMD.PostPackageRepair";
             asyncResp->res.jsonValue["OverWritePolicy"] = "WrapsWhenFull";
             asyncResp->res.jsonValue["MaxNumberOfRecords"] = 10;
             std::pair<std::string, std::string> redfishDateTimeOffset =
@@ -1457,15 +1457,15 @@ inline void requestRoutesPprService(App& app)
 
             asyncResp->res.jsonValue["Actions"]["#LogService.pprStatus"]
                                     ["target"] = std::format(
-                "/redfish/v1/Systems/{}/LogServices/PostPackageRepair/Status",
+                "/redfish/v1/Systems/{}/LogServices/Oem/AMD.PostPackageRepair/Status",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME);
             asyncResp->res.jsonValue["Actions"]["#LogService.pprConfig"]
                                     ["target"] = std::format(
-                "/redfish/v1/Systems/{}/LogServices/PostPackageRepair/Config",
+                "/redfish/v1/Systems/{}/LogServices/Oem/AMD.PostPackageRepair/Config",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME);
             asyncResp->res.jsonValue["Actions"]["#LogService.pprFile"]
                                     ["target"] = std::format(
-                "/redfish/v1/Systems/{}/LogServices/PostPackageRepair/RepairData",
+                "/redfish/v1/Systems/{}/LogServices/Oem/AMD.PostPackageRepair/RepairData",
                 BMCWEB_REDFISH_SYSTEM_URI_NAME);
         });
 }
@@ -1540,7 +1540,7 @@ inline void requestRoutesPprFile(App& app)
 {
     BMCWEB_ROUTE(
         app,
-        "/redfish/v1/Systems/<str>/LogServices/PostPackageRepair/RepairData")
+        "/redfish/v1/Systems/<str>/LogServices/Oem/AMD.PostPackageRepair/RepairData")
         .privileges(redfish::privileges::patchLogEntry)
         .methods(
             boost::beast::http::verb::
@@ -1621,7 +1621,7 @@ inline void requestRoutesPprFile(App& app)
 inline void requestRoutesPprStatus(App& app)
 {
     BMCWEB_ROUTE(
-        app, "/redfish/v1/Systems/<str>/LogServices/PostPackageRepair/Status")
+        app, "/redfish/v1/Systems/<str>/LogServices/Oem/AMD.PostPackageRepair/Status")
         .privileges({{"ConfigureComponents"}})
         .methods(boost::beast::http::verb::get)(
             [&app](const crow::Request& req,
@@ -1694,7 +1694,7 @@ inline void requestRoutesPprStatus(App& app)
 inline void requestRoutesPprGetConfig(App& app)
 {
     BMCWEB_ROUTE(
-        app, "/redfish/v1/Systems/<str>/LogServices/PostPackageRepair/Config")
+        app, "/redfish/v1/Systems/<str>/LogServices/Oem/AMD.PostPackageRepair/Config")
         .privileges({{"ConfigureComponents"}})
         .methods(boost::beast::http::verb::get)(
             [&app](const crow::Request& req,
@@ -1767,7 +1767,7 @@ inline void requestRoutesPprGetConfig(App& app)
 inline void requestRoutesPprSetConfig(App& app)
 {
     BMCWEB_ROUTE(
-        app, "/redfish/v1/Systems/<str>/LogServices/PostPackageRepair/Config")
+        app, "/redfish/v1/Systems/<str>/LogServices/Oem/AMD.PostPackageRepair/Config")
         .privileges(redfish::privileges::patchLogService)
         .methods(boost::beast::http::verb::patch)(
             [&app](const crow::Request& req,
